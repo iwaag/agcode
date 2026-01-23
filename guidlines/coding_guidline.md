@@ -13,11 +13,11 @@ The primary goal is:
 
 task_id = YYYYMMDD-HHMMSS-(random 6 characters such as a1f45t)
 
-If your plan is just some minor changes, additions, or removals, follow template_note.md and save it inside devlog folder.
+If your plan is just some minor changes, additions, or removals, follow template_note.md and save it inside docs/devlogs folder at project root.
 
 In this case, name file as <task_id>_note.md.
 
-If your plan is complex, follow template_plan.md and template_report.md and save those inside devlog folder.
+If your plan is complex, follow template_plan.md and template_report.md and save those inside docs/devlogs folder at project root.
 
 In this case, name file as <task_id>_plan.md and <task_id>_report.md.
 
