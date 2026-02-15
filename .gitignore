@@ -1,1 +1,15 @@
-.venv
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.env.*
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+.local/
+#tests are not ready yet
+tests/
+pytest.ini

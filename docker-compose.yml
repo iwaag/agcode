@@ -1,0 +1,18 @@
+services:
+  agcode:
+    build: .
+    ports:
+      - "10002:8000"
+    environment:
+      CLIENT_ID: ${CLIENT_ID}
+      STORAGE_SERVICE_URL : ${STORAGE_SERVICE_URL}
+      KEYCLOAK_URL: ${KEYCLOAK_URL}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      #KEYCLOAK_AUDIENCE: ””
+      SQL_TYPE: ${SQL_TYPE}
+      SQL_HOST: ${SQL_HOST}
+      SQL_PORT: ${SQL_PORT}
+      SQL_USER: ${SQL_USER}
+      SQL_PASSWORD: ${SQL_PASSWORD}
+      SQL_DB: ${SQL_DB}
