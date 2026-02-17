@@ -10,6 +10,7 @@ dependencies = [
     "fastapi",
     "uvicorn",
     "sqlmodel",
+    "kubernetes",
     "agpyutils @ git+https://github.com/iwaag/agpyutils.git@main"
 ]
 
