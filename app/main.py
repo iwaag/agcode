@@ -1,7 +1,7 @@
 import logging
 from fastapi import Depends, FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-#from routers.user import router as user_router
+from routers.session import router as session_router
 
 app = FastAPI(
     title="agcode"
@@ -13,7 +13,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-#app.include_router(user_router, prefix="/user", tags=["user"])
+app.include_router(session_router, prefix="/session", tags=["session"])
 
 logging.basicConfig(level=logging.DEBUG, force=True)
 

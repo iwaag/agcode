@@ -1,9 +1,12 @@
+from fastapi import Depends
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import os
+
+from schema.schema import SessionConfig, SessionInfo
 WORKER_IMAGE_NAME = os.getenv("WORKER_IMAGE_NAME")
 
-def launch_worker_with_pvc(task_id: str, user_id: str):
+async def new_session(session: SessionConfig, task_id: str, project_id: str, user_id: str):
     config.load_kube_config()
     v1 = client.CoreV1Api()
     namespace = "default"
@@ -36,7 +39,7 @@ def launch_worker_with_pvc(task_id: str, user_id: str):
             containers=[
                 client.V1Container(
                     name="worker-container",
-                    image="WORKER_IMAGE_NAME:latest",
+                    image=f"${WORKER_IMAGE_NAME}:latest",
                     volume_mounts=[
                         client.V1VolumeMount(
                             name="task-data",

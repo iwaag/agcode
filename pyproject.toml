@@ -11,13 +11,18 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "fastapi",
+    "fastapi[standard]",
     "uvicorn",
     "sqlmodel",
     "kubernetes",
+    "nanoid",
+    "psycopg2-binary",
     "agpyutils @ git+https://github.com/iwaag/agpyutils.git@main",
 ]
 
 [build-system]
 requires = ["uv_build>=0.10.3,<0.11.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+package = false
