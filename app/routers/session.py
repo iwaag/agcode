@@ -1,21 +1,53 @@
-from fastapi import APIRouter, Depends, Header
+from datetime import datetime
+
+from fastapi import APIRouter, Depends
 from agpyutils.auth import get_auth_info, AuthInfo
-from schema.schema import SessionConfig, SessionInfo
+from sse_starlette.sse import EventSourceResponse
+
+from schema.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate
 import db.database as db
 import service.session_k8s as task_session
+import service.redis as redis_service
+import core.common as common
 
 router = APIRouter()
 
+
 @router.post("/new", summary="New task session")
-async def new_session(session: SessionConfig, project_id: str, auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
-    new_session_data = db.new_session(auth.user_id, project_id, session)
-    new_session = await task_session.new_session(session=session, task_id=new_session_data.id, project_id=project_id, user_id=auth.user_id)
-    return new_session
+async def new_session(session: SessionConfig,  auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
+    new_session_model = db.new_session(user_id=auth.user_id, session_config=session)
+    #new_session = await task_session.new_session(session=session, task_id=new_session_data.id, project_id=session.project_id, user_id=auth.user_id)
+    new_session_info = common.session_model_to_scheme(new_session_model)
+    return new_session_info
 
-@router.get("/list", summary="task session list")
-async def task_list(project_id: str, auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
-    return SessionInfo()
+@router.post("/open", summary="Open task session.")
+async def new_session(session_id: str,  auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
+    session_data = db.get_session(session_id=session_id)
+    await task_session.run_session(task_id=session_data.id, project_id=session_data.project_id, user_id=auth.user_id)
+    new_session_model = db.update_session(session_data.id, SessionUpdate(task_started_at=datetime.now()))
+    new_session_info = common.session_model_to_scheme(new_session_model)
+    return new_session_info
 
-@router.post("/hook", summary="webhook to receive session updates")
-async def hook_on_update(info: SessionInfo, auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
-    return SessionInfo()
+
+@router.get("/list", summary="Task session list")
+async def task_list(project_id: str, auth: AuthInfo = Depends(get_auth_info)) -> SessionListInfo:
+    session_sequence = db.list_sessions(auth.user_id, project_id)
+    session_info_list = common.session_model_sequence_to_sceme(session_sequence)
+    return session_info_list
+
+
+@router.post("/hook/{session_id}", summary="Webhook to receive session updates from workers")
+async def hook_on_update(session_id: str, updates: SessionUpdate):
+    updated = db.update_session(session_id, updates)
+    channel = redis_service.session_channel(session_id)
+    await redis_service.publish(channel, updated.mode)
+    return updated
+
+
+@router.get("/stream/{session_id}", summary="SSE stream for real-time session updates")
+async def stream_session(session_id: str, auth: AuthInfo = Depends(get_auth_info)):
+    async def event_generator():
+        async for message in redis_service.subscribe(redis_service.session_channel(session_id)):
+            yield {"data": message}
+
+    return EventSourceResponse(event_generator())

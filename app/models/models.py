@@ -37,9 +37,8 @@ class Session(SQLModel, table=True):
     task_started_at: Optional[datetime]
     finished_at: Optional[datetime] = None
     updated_at: Optional[datetime]
-    user_id: str
+    user_id: str = Field(index=True)
     project_id: str
-    instruction_id: str
     config: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(MutableDict.as_mutable(JSONB), nullable=False),
