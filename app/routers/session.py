@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from agpyutils.auth import get_auth_info, AuthInfo
 from sse_starlette.sse import EventSourceResponse
 
@@ -13,6 +13,15 @@ import core.common as common
 router = APIRouter()
 
 
+def _get_owned_session(session_id: str, user_id: str):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Session access denied")
+    return session
+
+
 @router.post("/new", summary="New task session")
 async def new_session(session: SessionConfig,  auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
     new_session_model = db.new_session(user_id=auth.user_id, session_config=session)
@@ -21,9 +30,9 @@ async def new_session(session: SessionConfig,  auth: AuthInfo = Depends(get_auth
     return new_session_info
 
 @router.post("/open", summary="Open task session.")
-async def new_session(session_id: str,  auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
-    session_data = db.get_session(session_id=session_id)
-    await task_session.run_session(task_id=session_data.id, project_id=session_data.project_id, user_id=auth.user_id)
+async def open_session(session_id: str,  auth: AuthInfo = Depends(get_auth_info)) -> SessionInfo:
+    session_data = _get_owned_session(session_id=session_id, user_id=auth.user_id)
+    await task_session.run_session(session_id=session_data.id, project_id=session_data.project_id, user_id=auth.user_id)
     new_session_model = db.update_session(session_data.id, SessionUpdate(task_started_at=datetime.now()))
     new_session_info = common.session_model_to_scheme(new_session_model)
     return new_session_info
@@ -46,6 +55,8 @@ async def hook_on_update(session_id: str, updates: SessionUpdate):
 
 @router.get("/stream/{session_id}", summary="SSE stream for real-time session updates")
 async def stream_session(session_id: str, auth: AuthInfo = Depends(get_auth_info)):
+    _get_owned_session(session_id=session_id, user_id=auth.user_id)
+
     async def event_generator():
         async for message in redis_service.subscribe(redis_service.session_channel(session_id)):
             yield {"data": message}

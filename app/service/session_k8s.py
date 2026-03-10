@@ -1,11 +1,12 @@
 import os
 import re
 import time
+from pathlib import Path
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from schema.schema import SessionConfig, SessionInfo
+from schema.schema import SessionInfo
 import db.database as db
 
 IMAGE_NAME_CODER_PRO = os.getenv("IMAGE_NAME_CODER_PRO")
@@ -14,6 +15,9 @@ NAMESPACE = "default"
 STORAGE_CLASS_NAME = "microk8s-hostpath"
 PVC_SIZE = "1Gi"
 SCHEDULING_TIMEOUT_SECONDS = 30
+WORKER_PORT = int(os.getenv("SESSION_WORKER_PORT", "8000"))
+WORKER_SOCKETIO_PATH = os.getenv("SESSION_WORKER_SOCKETIO_PATH", "/chat/realtime")
+REMOTE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "remote-config.yaml"
 
 
 def _to_k8s_name_fragment(value: str) -> str:
@@ -36,6 +40,17 @@ def _resolve_image(image_name: str | None, env_name: str) -> str:
     return f"{image_name}:latest"
 
 
+def _session_resource_names(session_id: str) -> dict[str, str]:
+    task_name = _to_k8s_name_fragment(session_id)
+    return {
+        "pro_pvc_name": f"pvc-session-{task_name}-pro",
+        "noob_pvc_name": f"pvc-session-{task_name}-noob",
+        "pro_pod_name": f"worker-session-{task_name}-pro",
+        "noob_pod_name": f"worker-session-{task_name}-noob",
+        "pro_service_name": f"svc-session-{task_name}-pro",
+    }
+
+
 def _ensure_pvc(v1: client.CoreV1Api, pvc_name: str) -> None:
     try:
         v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
@@ -55,6 +70,40 @@ def _ensure_pvc(v1: client.CoreV1Api, pvc_name: str) -> None:
         ),
     )
     v1.create_namespaced_persistent_volume_claim(namespace=NAMESPACE, body=pvc_body)
+
+
+def _ensure_service(
+    v1: client.CoreV1Api,
+    *,
+    service_name: str,
+    selector: dict[str, str],
+    port: int = WORKER_PORT,
+) -> None:
+    try:
+        v1.read_namespaced_service(name=service_name, namespace=NAMESPACE)
+        print(f"Service {service_name} already exists. Reusing...")
+        return
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    print(f"Service {service_name} not found. Creating new one...")
+    service_body = client.V1Service(
+        metadata=client.V1ObjectMeta(name=service_name),
+        spec=client.V1ServiceSpec(
+            selector=selector,
+            ports=[
+                client.V1ServicePort(
+                    name="ws",
+                    port=port,
+                    target_port=port,
+                    protocol="TCP",
+                )
+            ],
+            type="ClusterIP",
+        ),
+    )
+    v1.create_namespaced_service(namespace=NAMESPACE, body=service_body)
 
 
 def _build_pod(
@@ -146,18 +195,55 @@ def _wait_for_node_assignment(v1: client.CoreV1Api, pod_name: str) -> str:
     raise TimeoutError(f"Pod {pod_name} was not scheduled within {SCHEDULING_TIMEOUT_SECONDS} seconds")
 
 
+def _wait_for_pod_ready(v1: client.CoreV1Api, pod_name: str) -> None:
+    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
+        if pod.status.phase == "Running":
+            for condition in pod.status.conditions or []:
+                if condition.type == "Ready" and condition.status == "True":
+                    return
+        time.sleep(1)
+
+    raise TimeoutError(f"Pod {pod_name} was not ready within {SCHEDULING_TIMEOUT_SECONDS} seconds")
+
+
+def _wait_for_service_endpoints(v1: client.CoreV1Api, service_name: str) -> None:
+    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        endpoints = v1.read_namespaced_endpoints(name=service_name, namespace=NAMESPACE)
+        for subset in endpoints.subsets or []:
+            if subset.addresses:
+                return
+        time.sleep(1)
+
+    raise TimeoutError(
+        f"Service {service_name} had no ready endpoints within {SCHEDULING_TIMEOUT_SECONDS} seconds"
+    )
+
+
+def get_pro_service_name(session_id: str) -> str:
+    return _session_resource_names(session_id)["pro_service_name"]
+
+
+def get_pro_realtime_socketio_base_url(session_id: str) -> str:
+    service_name = get_pro_service_name(session_id)
+    return f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{WORKER_PORT}"
+
+
 async def run_session(session_id: str, project_id: str, user_id: str) -> SessionInfo:
     session_info = db.get_session(session_id)
     if not session_info:
         raise ValueError(f"Session {session_id} not found")
 
-    config.load_kube_config(config_file="./remote-config.yaml")
+    config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    task_name = _to_k8s_name_fragment(session_id)
-    pro_pvc_name = f"pvc-session-{task_name}-pro"
-    noob_pvc_name = f"pvc-session-{task_name}-noob"
-    pro_pod_name = f"worker-session-{task_name}-pro"
-    noob_pod_name = f"worker-session-{task_name}-noob"
+    names = _session_resource_names(session_id)
+    pro_pvc_name = names["pro_pvc_name"]
+    noob_pvc_name = names["noob_pvc_name"]
+    pro_pod_name = names["pro_pod_name"]
+    noob_pod_name = names["noob_pod_name"]
+    pro_service_name = names["pro_service_name"]
 
     _ensure_pvc(v1, pro_pvc_name)
     _ensure_pvc(v1, noob_pvc_name)
@@ -172,6 +258,15 @@ async def run_session(session_id: str, project_id: str, user_id: str) -> Session
         peer_pvc_name=noob_pvc_name,
     )
     _create_or_reuse_pod(v1, pro_pod_spec)
+    _ensure_service(
+        v1,
+        service_name=pro_service_name,
+        selector={
+            "task-id": session_id,
+            "type": "session-worker",
+            "role": "pro",
+        },
+    )
     assigned_node_name = _wait_for_node_assignment(v1, pro_pod_name)
 
     noob_pod_spec = _build_pod(
@@ -185,5 +280,7 @@ async def run_session(session_id: str, project_id: str, user_id: str) -> Session
         node_name=assigned_node_name,
     )
     _create_or_reuse_pod(v1, noob_pod_spec)
+    _wait_for_pod_ready(v1, pro_pod_name)
+    _wait_for_service_endpoints(v1, pro_service_name)
 
     return SessionInfo(id=session_id)
