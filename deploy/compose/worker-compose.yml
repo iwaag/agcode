@@ -14,40 +14,40 @@ services:
       AGENT_PROVIDER: ${AGENT_PROVIDER}
       #CODEX_API_KEY: ${CODEX_API_KEY}
 
-  agcode-worker:
-    image: iwaag/coder-noob:latest
-    build:
-      context: ../..
-      dockerfile: deploy/docker/worker.Dockerfile
-    ports:
-      - "11002:8000"
-    environment:
-      PRODUCT_ENV: ${PRODUCT_ENV}
-      CLIENT_ID: ${CLIENT_ID}
-      WORKSPACE_ROOT: ${WORKSPACE_ROOT}
-      AGENT_TIER: "NOOB"
-      AGENT_PROVIDER: "LOCAL"
-      LOCAL_LLM_URL: ${LOCAL_LLM_URL}
-      HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN}
-      HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS: ${HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS}
-      HATCHET_CLIENT_TLS_STRATEGY: "none"
+  # agcode-worker:
+  #   image: iwaag/coder-noob:latest
+  #   build:
+  #     context: ../..
+  #     dockerfile: deploy/docker/worker.Dockerfile
+  #   ports:
+  #     - "11002:8000"
+  #   environment:
+  #     PRODUCT_ENV: ${PRODUCT_ENV}
+  #     CLIENT_ID: ${CLIENT_ID}
+  #     WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+  #     AGENT_TIER: "NOOB"
+  #     AGENT_PROVIDER: "LOCAL"
+  #     LOCAL_LLM_URL: ${LOCAL_LLM_URL}
+  #     HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN}
+  #     HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS: ${HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS}
+  #     HATCHET_CLIENT_TLS_STRATEGY: "none"
 
-  agcode-sidecar:
-    image: iwaag/coderside:latest
-    build:
-      context: ../../services/worker/sidecar
-      dockerfile: Dockerfile
-    ports:
-      - "11003:8000"
-    environment:
-      PRODUCT_ENV: ${PRODUCT_ENV}
-      CLIENT_ID: ${CLIENT_ID}
-      WORKSPACE_ROOT: ${WORKSPACE_ROOT}
-      AGENT_TIER: "NOOB"
-      AGENT_PROVIDER: "LOCAL"
-      LOCAL_LLM_URL: ${LOCAL_LLM_URL}
-      HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN}
-      HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS: ${HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS}
-      HATCHET_CLIENT_TLS_STRATEGY: "none"
+  # agcode-sidecar:
+  #   image: iwaag/coderside:latest
+  #   build:
+  #     context: ../../services/worker/sidecar
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "11003:8000"
+  #   environment:
+  #     PRODUCT_ENV: ${PRODUCT_ENV}
+  #     CLIENT_ID: ${CLIENT_ID}
+  #     WORKSPACE_ROOT: ${WORKSPACE_ROOT}
+  #     AGENT_TIER: "NOOB"
+  #     AGENT_PROVIDER: "LOCAL"
+  #     LOCAL_LLM_URL: ${LOCAL_LLM_URL}
+  #     HATCHET_CLIENT_TOKEN: ${HATCHET_CLIENT_TOKEN}
+  #     HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS: ${HATCHET_CLIENT_GRPC_BROADCAST_ADDRESS}
+  #     HATCHET_CLIENT_TLS_STRATEGY: "none"
 
  
