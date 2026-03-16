@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from agpyutils.auth import get_auth_info, AuthInfo
 from sse_starlette.sse import EventSourceResponse
 
-from schema.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate
-import db.database as db
-import service.session_k8s as task_session
-import service.redis as redis_service
-import core.common as common
+from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate
+from agcode_domain import session_mapping as common
+from agcode_infra.db import database as db
+from agcode_infra.orchestration import session_k8s as task_session
+from agcode_infra.pubsub import redis as redis_service
 
 router = APIRouter()
 

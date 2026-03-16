@@ -4,8 +4,8 @@ from typing import List
 from sqlalchemy import Engine
 from sqlmodel import SQLModel, Session, create_engine, select
 
-from schema.schema import SessionConfig, SessionListInfo, SessionUpdate
-from models.models import Agent, Instruction, Session as TaskSession
+from agcode_domain.schema import SessionConfig, SessionListInfo, SessionUpdate
+from agcode_infra.db.models import Agent, Instruction, Session as TaskSession
 
 
 

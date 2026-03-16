@@ -7,8 +7,8 @@ import socketio
 from agpyutils.auth import get_auth_info
 from fastapi.security import HTTPAuthorizationCredentials
 
-import db.database as db
-import service.session_k8s as task_session
+from agcode_infra.db import database as db
+from agcode_infra.orchestration import session_k8s as task_session
 
 SOCKETIO_PATH = os.getenv("SESSION_SOCKETIO_PATH", "/session/socket.io")
 UPSTREAM_SOCKETIO_PATH = task_session.WORKER_SOCKETIO_PATH

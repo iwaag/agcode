@@ -2,8 +2,8 @@ import logging
 import socketio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from routers.session import router as session_router
-from realtime.socketio_proxy import sio, SOCKETIO_PATH
+from agcode_api.realtime.socketio_proxy import SOCKETIO_PATH, sio
+from agcode_api.routers.session import router as session_router
 
 fastapi_app = FastAPI(
     title="agcode"

@@ -6,8 +6,8 @@ from pathlib import Path
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from schema.schema import SessionInfo
-import db.database as db
+from agcode_domain.schema import SessionInfo
+from agcode_infra.db import database as db
 
 IMAGE_NAME_CODER_PRO = os.getenv("IMAGE_NAME_CODER_PRO")
 IMAGE_NAME_CODER_NOOB = os.getenv("IMAGE_NAME_CODER_NOOB")
@@ -17,7 +17,7 @@ PVC_SIZE = "1Gi"
 SCHEDULING_TIMEOUT_SECONDS = 30
 WORKER_PORT = int(os.getenv("SESSION_WORKER_PORT", "8000"))
 WORKER_SOCKETIO_PATH = os.getenv("SESSION_WORKER_SOCKETIO_PATH", "/chat/realtime")
-REMOTE_CONFIG_PATH = Path(__file__).resolve().parent.parent / "remote-config.yaml"
+REMOTE_CONFIG_PATH = Path(__file__).resolve().parents[5] / "app" / "remote-config.yaml"
 
 
 def _to_k8s_name_fragment(value: str) -> str:

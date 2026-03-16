@@ -1,7 +1,7 @@
 from sqlmodel import Sequence
 
-from models.models import Session
-from schema.schema import SessionInfo, SessionListInfo
+from agcode_domain.schema import SessionInfo, SessionListInfo
+from agcode_infra.db.models import Session
 
 
 def session_model_to_scheme(model: Session)->SessionInfo:

@@ -1,7 +1,8 @@
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/services/api/src:/app/packages/domain/src:/app/packages/infra/src
 
 WORKDIR /app
 
@@ -13,9 +14,11 @@ COPY pyproject.toml uv.lock* /app/
 
 RUN uv sync --frozen --no-install-project
 
-COPY ./app /app/
+COPY ./services /app/services
+COPY ./packages /app/packages
+COPY ./app/remote-config.yaml /app/app/remote-config.yaml
 
 EXPOSE 8000
 
 # Define the command to run the application when the container starts
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "uvicorn", "agcode_api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
