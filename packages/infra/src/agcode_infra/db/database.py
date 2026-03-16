@@ -1,29 +1,29 @@
 from datetime import datetime
-import os
-from typing import List
 from sqlalchemy import Engine
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from agcode_domain.schema import SessionConfig, SessionListInfo, SessionUpdate
+from agcode_infra.config import get_database_settings
 from agcode_infra.db.models import Agent, Instruction, Session as TaskSession
 
+_engine: Engine | None = None
 
 
-SQL_TYPE = os.getenv("SQL_TYPE")
-SQL_USER = os.getenv("SQL_USER")
-SQL_PASSWORD = os.getenv("SQL_PASSWORD")
-SQL_HOST = os.getenv("SQL_HOST")
-SQL_PORT = os.getenv("SQL_PORT")
-SQL_DB = os.getenv("SQL_DB")
-sql_url = f"{SQL_TYPE}://{SQL_USER}:{SQL_PASSWORD}@{SQL_HOST}:{SQL_PORT}/{SQL_DB}"
-engine = create_engine(sql_url)
-SQLModel.metadata.create_all(engine)
+def get_engine() -> Engine:
+    global _engine
+    if _engine is None:
+        _engine = create_engine(get_database_settings().url)
+    return _engine
+
+
+def init_database() -> None:
+    SQLModel.metadata.create_all(get_engine())
 
 def new_session(user_id: str, session_config: SessionConfig) -> TaskSession:
     new_session = TaskSession(title = session_config.title, user_id = user_id, project_id = session_config.project_id,
                               instruction = session_config.instruction, config = session_config.model_dump(),
                               created_at=datetime.now())
-    with Session(engine) as session:
+    with Session(get_engine()) as session:
         session.add(new_session)
         session.flush()
         session.commit()
@@ -31,7 +31,7 @@ def new_session(user_id: str, session_config: SessionConfig) -> TaskSession:
         return new_session
 
 def update_session(session_id: str, updates: SessionUpdate) -> TaskSession:
-    with Session(engine) as session:
+    with Session(get_engine()) as session:
         db_session = session.get(TaskSession, session_id)
         if not db_session:
             raise ValueError(f"Session {session_id} not found")
@@ -44,10 +44,10 @@ def update_session(session_id: str, updates: SessionUpdate) -> TaskSession:
         return db_session
 
 def get_session(session_id: str) -> TaskSession:
-    with Session(engine) as session:
+    with Session(get_engine()) as session:
         return session.get(TaskSession, session_id)
 
 def list_sessions(user_id: str, project_id: str) -> SessionListInfo:
-    with Session(engine) as session:
+    with Session(get_engine()) as session:
         stmt = select(TaskSession).where(TaskSession.user_id == user_id, TaskSession.project_id == project_id)
         return session.exec(stmt).all()

@@ -1,12 +1,22 @@
 import logging
+from contextlib import asynccontextmanager
+
 import socketio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from agcode_api.realtime.socketio_proxy import SOCKETIO_PATH, sio
 from agcode_api.routers.session import router as session_router
+from agcode_infra.db.database import init_database
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_database()
+    yield
 
 fastapi_app = FastAPI(
-    title="agcode"
+    title="agcode",
+    lifespan=lifespan,
 )
 fastapi_app.add_middleware(
     CORSMiddleware,

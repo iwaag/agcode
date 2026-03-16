@@ -1,23 +1,24 @@
 import os
 import re
 import time
-from pathlib import Path
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
 from agcode_domain.schema import SessionInfo
+from agcode_infra.config import get_session_runtime_settings
 from agcode_infra.db import database as db
 
-IMAGE_NAME_CODER_PRO = os.getenv("IMAGE_NAME_CODER_PRO")
-IMAGE_NAME_CODER_NOOB = os.getenv("IMAGE_NAME_CODER_NOOB")
-NAMESPACE = "default"
-STORAGE_CLASS_NAME = "microk8s-hostpath"
-PVC_SIZE = "1Gi"
-SCHEDULING_TIMEOUT_SECONDS = 30
-WORKER_PORT = int(os.getenv("SESSION_WORKER_PORT", "8000"))
-WORKER_SOCKETIO_PATH = os.getenv("SESSION_WORKER_SOCKETIO_PATH", "/chat/realtime")
-REMOTE_CONFIG_PATH = Path(__file__).resolve().parents[5] / "app" / "remote-config.yaml"
+SETTINGS = get_session_runtime_settings()
+IMAGE_NAME_CODER_PRO = SETTINGS.image_name_coder_pro
+IMAGE_NAME_CODER_NOOB = SETTINGS.image_name_coder_noob
+NAMESPACE = SETTINGS.namespace
+STORAGE_CLASS_NAME = SETTINGS.storage_class_name
+PVC_SIZE = SETTINGS.pvc_size
+SCHEDULING_TIMEOUT_SECONDS = SETTINGS.scheduling_timeout_seconds
+WORKER_PORT = SETTINGS.worker_port
+WORKER_SOCKETIO_PATH = SETTINGS.worker_socketio_path
+REMOTE_CONFIG_PATH = SETTINGS.remote_config_path
 
 
 def _to_k8s_name_fragment(value: str) -> str:

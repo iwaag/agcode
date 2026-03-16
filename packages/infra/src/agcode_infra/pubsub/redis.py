@@ -1,13 +1,11 @@
-import os
 from collections.abc import AsyncGenerator
 
 import redis.asyncio as aioredis
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+from agcode_infra.config import get_redis_settings
 
 
 def _client() -> aioredis.Redis:
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+    return aioredis.from_url(get_redis_settings().url, decode_responses=True)
 
 
 async def publish(channel: str, message: str) -> None:
