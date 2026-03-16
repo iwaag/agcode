@@ -62,7 +62,7 @@ def get_redis_settings() -> RedisSettings:
 
 
 def get_session_runtime_settings() -> SessionRuntimeSettings:
-    default_remote_config = _project_root() / "app" / "remote-config.yaml"
+    default_remote_config = _project_root() / "deploy" / "k8s" / "remote-config.yaml"
     return SessionRuntimeSettings(
         image_name_coder_pro=os.getenv("IMAGE_NAME_CODER_PRO"),
         image_name_coder_noob=os.getenv("IMAGE_NAME_CODER_NOOB"),

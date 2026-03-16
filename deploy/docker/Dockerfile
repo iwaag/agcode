@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-install-project
 
 COPY ./services /app/services
 COPY ./packages /app/packages
-COPY ./app/remote-config.yaml /app/app/remote-config.yaml
+COPY ./deploy/k8s/remote-config.yaml /app/deploy/k8s/remote-config.yaml
 
 EXPOSE 8000
 
