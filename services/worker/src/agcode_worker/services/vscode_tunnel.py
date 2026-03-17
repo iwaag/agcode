@@ -20,8 +20,6 @@ _DEVICE_LOGIN_PATTERN = re.compile(
 )
 
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", None)
-my_token = asyncio.run(issue_own_client_access_token(AUTH_TOKEN))
-my_auth_info = asyncio.run(auth_info_from_bearer_token(my_token))
 
 task_hub = get_task_hub()
 @dataclass(frozen=True)
@@ -111,6 +109,8 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
     finally:
         log_fd.close()
     PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+    my_token = await issue_own_client_access_token(AUTH_TOKEN)
+    my_auth_info = await auth_info_from_bearer_token(my_token)
     for _ in range(TUNNEL_TIMEOUT):
         try:
             await asyncio.wait_for(proc.wait(), timeout=1)
@@ -119,7 +119,6 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
         log_content = _read_log_content()
         if "Open this link in your browser" in log_content or "https://vscode.dev/tunnel/" in log_content:
             return TunnelStartResult(status="ok", pid=proc.pid, tunnel_name=tunnel_name)
-
         prompt = _extract_device_login(log_content)
         if prompt is not None:
             task_hub.request_unmanaged_labor(
