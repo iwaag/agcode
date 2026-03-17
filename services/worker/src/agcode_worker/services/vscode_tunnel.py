@@ -15,7 +15,6 @@ VSCODE_CLI_BIN = os.getenv("VSCODE_CLI_BIN", "code")
 PID_FILE = Path(os.getenv("VSCODE_TUNNEL_PID_FILE", "/tmp/vscode-tunnel.pid"))
 LOG_FILE = Path(os.getenv("VSCODE_TUNNEL_LOG_FILE", "/tmp/vscode-tunnel.log"))
 TUNNEL_TIMEOUT = int(os.getenv("VSCODE_TUNNEL_TIMEOUT_SECONDS", "30"))
-_TUNNEL_URL_PATTERN = re.compile(r"https://vscode\.dev/tunnel/\S+")
 _DEVICE_LOGIN_PATTERN = re.compile(
     r"please log into (https://github\.com/login/device) and use code ([A-Z0-9]{4}-[A-Z0-9]{4})"
 )
@@ -35,7 +34,7 @@ class DeviceLoginPrompt:
 class TunnelStartResult:
     status: Literal["ok", "already_running", "manual_auth_required"]
     pid: int
-    url: str | None = None
+    tunnel_name: str | None = None
     redirect_url: str | None = None
     code: str | None = None
 
@@ -45,13 +44,6 @@ def _extract_device_login(log_content: str) -> DeviceLoginPrompt | None:
     if match is None:
         return None
     return DeviceLoginPrompt(url=match.group(1), code=match.group(2))
-
-
-def _extract_tunnel_url(log_content: str) -> str | None:
-    match = _TUNNEL_URL_PATTERN.search(log_content)
-    if match is None:
-        return None
-    return match.group(0)
 
 
 def _read_log_content() -> str:
@@ -79,27 +71,24 @@ def _get_running_pid() -> int | None:
     return pid
 
 
-def _result_for_existing_process(pid: int, log_content: str) -> TunnelStartResult:
-    tunnel_url = _extract_tunnel_url(log_content)
-    if tunnel_url is not None:
-        return TunnelStartResult(status="already_running", pid=pid, url=tunnel_url)
-
+def _result_for_existing_process(pid: int, log_content: str, tunnel_name: str) -> TunnelStartResult:
     prompt = _extract_device_login(log_content)
     if prompt is not None:
         return TunnelStartResult(
             status="manual_auth_required",
             pid=pid,
+            tunnel_name=tunnel_name,
             redirect_url=prompt.url,
             code=prompt.code,
         )
 
-    return TunnelStartResult(status="already_running", pid=pid)
+    return TunnelStartResult(status="already_running", pid=pid, tunnel_name=tunnel_name)
 
 
 async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResult:
     running_pid = _get_running_pid()
     if running_pid is not None:
-        return _result_for_existing_process(running_pid, _read_log_content())
+        return _result_for_existing_process(running_pid, _read_log_content(), tunnel_name)
 
     LOG_FILE.write_text("", encoding="utf-8")
     log_fd = open(LOG_FILE, "w", encoding="utf-8")
@@ -128,9 +117,8 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
         except asyncio.TimeoutError:
             pass
         log_content = _read_log_content()
-        tunnel_url = _extract_tunnel_url(log_content)
-        if tunnel_url is not None:
-            return TunnelStartResult(status="ok", pid=proc.pid, url=tunnel_url)
+        if "Open this link in your browser" in log_content or "https://vscode.dev/tunnel/" in log_content:
+            return TunnelStartResult(status="ok", pid=proc.pid, tunnel_name=tunnel_name)
 
         prompt = _extract_device_login(log_content)
         if prompt is not None:
@@ -143,6 +131,7 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
             return TunnelStartResult(
                 status="manual_auth_required",
                 pid=proc.pid,
+                tunnel_name=tunnel_name,
                 redirect_url=prompt.url,
                 code=prompt.code,
             )
@@ -158,4 +147,4 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
 
     log_content = _read_log_content()
     logging.error("code tunnel timed out after %ss:\n%s", TUNNEL_TIMEOUT, log_content)
-    raise TimeoutError(f"tunnel URL not found within {TUNNEL_TIMEOUT}s")
+    raise TimeoutError(f"tunnel start was not confirmed within {TUNNEL_TIMEOUT}s")

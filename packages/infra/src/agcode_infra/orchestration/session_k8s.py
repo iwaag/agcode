@@ -2,10 +2,11 @@ import os
 import re
 import time
 
+import httpx
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from agcode_domain.schema import SessionInfo
+from agcode_domain.schema import SessionInfo, TunnelInfo
 from agcode_infra.config import get_session_runtime_settings
 from agcode_infra.db import database as db
 
@@ -53,21 +54,34 @@ def _ensure_pvc(v1: client.CoreV1Api, pvc_name: str) -> None:
     try:
         v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
         print(f"PVC {pvc_name} already exists. Reusing...")
-        return
     except ApiException as e:
         if e.status != 404:
             raise
+        print(f"PVC {pvc_name} not found. Creating new one...")
+        pvc_body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(name=pvc_name),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                resources=client.V1ResourceRequirements(requests={"storage": PVC_SIZE}),
+                storage_class_name=STORAGE_CLASS_NAME,
+            ),
+        )
+        v1.create_namespaced_persistent_volume_claim(namespace=NAMESPACE, body=pvc_body)
 
-    print(f"PVC {pvc_name} not found. Creating new one...")
-    pvc_body = client.V1PersistentVolumeClaim(
-        metadata=client.V1ObjectMeta(name=pvc_name),
-        spec=client.V1PersistentVolumeClaimSpec(
-            access_modes=["ReadWriteOnce"],
-            resources=client.V1ResourceRequirements(requests={"storage": PVC_SIZE}),
-            storage_class_name=STORAGE_CLASS_NAME,
-        ),
+
+def _wait_for_pvc_bound(v1: client.CoreV1Api, pvc_name: str) -> None:
+    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        pvc = v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
+        if pvc.status.phase == "Bound":
+            return
+        time.sleep(1)
+
+    pvc = v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
+    raise TimeoutError(
+        f"PVC {pvc_name} was not bound within {SCHEDULING_TIMEOUT_SECONDS} seconds "
+        f"(phase={pvc.status.phase})"
     )
-    v1.create_namespaced_persistent_volume_claim(namespace=NAMESPACE, body=pvc_body)
 
 
 def _ensure_service(
@@ -209,13 +223,47 @@ def _wait_for_pod_ready(v1: client.CoreV1Api, pod_name: str) -> None:
     deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
     while time.time() < deadline:
         pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-        if pod.status.phase == "Running":
+        phase = pod.status.phase
+
+        if phase in ("Failed", "Unknown"):
+            conditions = pod.status.conditions or []
+            reason = pod.status.reason or "unknown"
+            message = pod.status.message or ""
+            conditions_str = ", ".join(
+                f"{c.type}={c.status}({c.reason})" for c in conditions if c.reason
+            )
+            raise RuntimeError(
+                f"Pod {pod_name} entered terminal phase {phase}: "
+                f"reason={reason} message={message} conditions=[{conditions_str}]"
+            )
+
+        if phase == "Running":
             for condition in pod.status.conditions or []:
                 if condition.type == "Ready" and condition.status == "True":
                     return
+
         time.sleep(1)
 
-    raise TimeoutError(f"Pod {pod_name} was not ready within {SCHEDULING_TIMEOUT_SECONDS} seconds")
+    pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
+    phase = pod.status.phase
+    conditions = pod.status.conditions or []
+    conditions_str = ", ".join(
+        f"{c.type}={c.status}(reason={c.reason}, msg={c.message})" for c in conditions
+    )
+    container_statuses = pod.status.container_statuses or []
+    container_info = []
+    for cs in container_statuses:
+        state = cs.state
+        if state.waiting:
+            container_info.append(f"{cs.name}: waiting reason={state.waiting.reason} msg={state.waiting.message}")
+        elif state.terminated:
+            container_info.append(f"{cs.name}: terminated reason={state.terminated.reason} exit={state.terminated.exit_code}")
+        else:
+            container_info.append(f"{cs.name}: running")
+    raise TimeoutError(
+        f"Pod {pod_name} was not ready within {SCHEDULING_TIMEOUT_SECONDS} seconds "
+        f"(phase={phase}, conditions=[{conditions_str}], containers=[{', '.join(container_info)}])"
+    )
 
 
 def _wait_for_service_endpoints(v1: client.CoreV1Api, service_name: str) -> None:
@@ -241,6 +289,28 @@ def get_pro_realtime_socketio_base_url(session_id: str) -> str:
     return f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{WORKER_PORT}"
 
 
+def get_pro_worker_base_url(session_id: str) -> str:
+    return get_pro_realtime_socketio_base_url(session_id)
+
+
+async def start_tunnel(session_id: str, tunnel_name: str, token: str) -> TunnelInfo:
+    base_url = get_pro_worker_base_url(session_id)
+    async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+        response = await client.post(
+            "/tunnel/start",
+            json={
+                "tunnel_name": tunnel_name,
+                "host_token": token,
+            },
+        )
+
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("status") == "manual_auth_required":
+        raise RuntimeError("Tunnel requires manual auth")
+    return TunnelInfo(tunnel_name=payload["tunnel_name"])
+
+
 async def run_session(session_id: str, project_id: str, user_id: str, token: str) -> SessionInfo:
     session_info = db.get_session(session_id)
     if not session_info:
@@ -260,10 +330,13 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
         session_id=session_id,
         user_id=user_id,
         role="pro",
+        token=token,
         image=_resolve_image(IMAGE_NAME_CODER_PRO, "IMAGE_NAME_CODER_PRO"),
         own_pvc_name=pro_pvc_name,
     )
     _create_or_reuse_pod(v1, pro_pod_spec)
+    _wait_for_node_assignment(v1, pro_pod_name)
+    _wait_for_pvc_bound(v1, pro_pvc_name)
     _ensure_service(
         v1,
         service_name=pro_service_name,

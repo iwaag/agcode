@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Sequence
 from datetime import datetime
+import re
 from typing import Protocol
 
 from agcode_domain.errors import SessionAccessDeniedError, SessionNotFoundError
-from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate
+from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate, TunnelInfo
 from agcode_domain.session_mapping import session_model_sequence_to_sceme, session_model_to_scheme
 
 
@@ -25,6 +26,7 @@ class SessionRepository(Protocol):
 class SessionRuntime(Protocol):
     async def run_session(self, session_id: str, project_id: str, user_id: str, token: str) -> SessionInfo: ...
     def get_pro_realtime_socketio_base_url(self, session_id: str) -> str: ...
+    async def start_tunnel(self, session_id: str, tunnel_name: str, token: str) -> TunnelInfo: ...
 
 
 class SessionEventBus(Protocol):
@@ -65,12 +67,41 @@ async def open_session(
     token: str
 ) -> SessionInfo:
     session = get_owned_session(repository, session_id=session_id, user_id=user_id)
-    await runtime.run_session(session_id=session.id, project_id=session.project_id, user_id=user_id)
+    await runtime.run_session(
+        session_id=session.id,
+        project_id=session.project_id,
+        user_id=user_id,
+        token=token,
+    )
     updated = repository.update_session(
         session.id,
         SessionUpdate(task_started_at=datetime.now()),
     )
     return session_model_to_scheme(updated)
+
+
+def build_tunnel_name(*, user_id: str) -> str:
+    tunnel_name = re.sub(r"[^a-zA-Z0-9-]+", "-", user_id).strip("-").lower()
+    if not tunnel_name:
+        raise ValueError("Tunnel name cannot be empty")
+    return tunnel_name
+
+
+async def start_session_tunnel(
+    repository: SessionRepository,
+    runtime: SessionRuntime,
+    *,
+    session_id: str,
+    user_id: str,
+    token: str,
+) -> TunnelInfo:
+    get_owned_session(repository, session_id=session_id, user_id=user_id)
+    tunnel_name = build_tunnel_name(user_id=user_id)
+    return await runtime.start_tunnel(
+        session_id=session_id,
+        tunnel_name=tunnel_name,
+        token=token,
+    )
 
 
 def list_sessions(

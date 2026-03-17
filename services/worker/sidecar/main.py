@@ -40,11 +40,12 @@ class OkGitHostResponse(BaseModel):
 
 class TunnelStartedResponse(BaseModel):
     status: Literal["ok"]
-    url: str
+    tunnel_name: str
 
 class TunnelAlreadyRunningResponse(BaseModel):
     status: Literal["already_running"]
     pid: int
+    tunnel_name: str
 
 
 # --- Request models ---
@@ -85,7 +86,11 @@ async def start_tunnel(req: StartTunnelRequest) -> TunnelStartedResponse | Tunne
         pid = int(PID_FILE.read_text().strip())
         try:
             os.kill(pid, 0)
-            return TunnelAlreadyRunningResponse(status="already_running", pid=pid)
+            return TunnelAlreadyRunningResponse(
+                status="already_running",
+                pid=pid,
+                tunnel_name=req.tunnel_name,
+            )
         except ProcessLookupError:
             PID_FILE.unlink(missing_ok=True)
 
@@ -110,7 +115,7 @@ async def start_tunnel(req: StartTunnelRequest) -> TunnelStartedResponse | Tunne
         log_content = LOG_FILE.read_text()
         match = re.search(r"https://vscode\.dev/tunnel/\S+", log_content)
         if match:
-            return TunnelStartedResponse(status="ok", url=match.group(0))
+            return TunnelStartedResponse(status="ok", tunnel_name=req.tunnel_name)
         if proc.returncode is not None:
             logging.error(f"code tunnel exited with code {proc.returncode}:\n{log_content}")
             raise HTTPException(status_code=500, detail=f"code tunnel exited unexpectedly (code {proc.returncode})")

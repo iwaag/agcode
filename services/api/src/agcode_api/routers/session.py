@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from agpyutils.auth import get_auth_info, AuthInfo
+import httpx
 from sse_starlette.sse import EventSourceResponse
 
 from agcode_domain import session_service
 from agcode_domain.errors import SessionAccessDeniedError, SessionNotFoundError
-from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate
+from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate, TunnelInfo
 from agcode_infra.db import database as db
 from agcode_infra.orchestration import session_k8s as task_session
 from agcode_infra.pubsub import redis as redis_service
@@ -36,6 +37,7 @@ async def open_session(session_id: str,  auth: AuthInfo = Depends(get_auth_info)
             task_session,
             session_id=session_id,
             user_id=auth.user_id,
+            token=auth.token,
         )
     except (SessionNotFoundError, SessionAccessDeniedError) as exc:
         _raise_http_session_error(exc)
@@ -75,3 +77,25 @@ async def stream_session(session_id: str, auth: AuthInfo = Depends(get_auth_info
             _raise_http_session_error(exc)
 
     return EventSourceResponse(event_generator())
+
+
+@router.post("/{session_id}/tunnel/start", summary="Start VS Code tunnel for a session")
+async def start_session_tunnel(session_id: str, auth: AuthInfo = Depends(get_auth_info)) -> TunnelInfo:
+    try:
+        return await session_service.start_session_tunnel(
+            db,
+            task_session,
+            session_id=session_id,
+            user_id=auth.user_id,
+            token=auth.token,
+        )
+    except (SessionNotFoundError, SessionAccessDeniedError) as exc:
+        _raise_http_session_error(exc)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Tunnel worker request timed out") from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=502, detail=f"Tunnel worker request failed: {exc.response.status_code}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Tunnel worker is unreachable") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -29,3 +29,6 @@ class SessionInfo(SessionUpdate):
 class SessionListInfo(BaseModel):
     sessions: Sequence[SessionInfo]
 
+
+class TunnelInfo(BaseModel):
+    tunnel_name: str

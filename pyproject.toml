@@ -13,6 +13,7 @@ classifiers = [
 dependencies = [
     "fastapi[standard]",
     "uvicorn",
+    "httpx",
     "python-socketio>=5.11",
     "sqlmodel",
     "kubernetes",
