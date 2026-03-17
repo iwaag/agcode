@@ -56,7 +56,7 @@ jobs:
           file: deploy/docker/worker-pro.Dockerfile
           push: true
           tags: |
-            coder-pro:latest
-            coder-pro:${{ github.sha }}
+            ${{ env.IMAGE_BASE }}-coder-pro:latest
+            ${{ env.IMAGE_BASE }}-coder-pro:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
