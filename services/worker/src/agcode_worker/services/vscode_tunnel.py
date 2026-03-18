@@ -120,9 +120,9 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
             return TunnelStartResult(status="ok", pid=proc.pid, tunnel_name=tunnel_name)
         prompt = _extract_device_login(log_content)
         if prompt is not None:
-            task_hub.request_unmanaged_labor(
+            task_hub.request_labor_auth(
                 task=task_models.Task_UnmanagedLabor(
-                    meta=task_models.TaskMetadata(task_id="", user_id=my_auth_info.user_id, project_id=""),
+                    meta=task_models.TaskMetadata(type_id="code_auth", user_id=my_auth_info.user_id, project_id=""),
                     redirect_url=prompt.url, wait_for=timedelta(seconds=5)
                 )
             )

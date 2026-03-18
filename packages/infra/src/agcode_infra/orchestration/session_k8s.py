@@ -14,7 +14,10 @@ from agcode_infra.config import get_session_runtime_settings
 from agcode_infra.db import database as db
 
 SETTINGS = get_session_runtime_settings()
+RUNTIME_MODE = SETTINGS.runtime_mode
 IMAGE_NAME_CODER_PRO = SETTINGS.image_name_coder_pro
+LOCAL_IMAGE_NAME_CODER_PRO = SETTINGS.local_image_name_coder_pro
+WORKER_BUILD_ID = SETTINGS.worker_build_id
 NAMESPACE = SETTINGS.namespace
 STORAGE_CLASS_NAME = SETTINGS.storage_class_name
 PVC_SIZE = SETTINGS.pvc_size
@@ -30,6 +33,11 @@ CLIENT_ID = os.getenv("CLIENT_ID", "agcode")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "agcode")
 KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET")
+
+
+def _is_local_microk8s_mode() -> bool:
+    return RUNTIME_MODE == "local_microk8s"
+
 
 def _to_k8s_name_fragment(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
@@ -49,6 +57,18 @@ def _resolve_image(image_name: str | None, env_name: str) -> str:
         return image_name
 
     return f"{image_name}:latest"
+
+
+def _get_coder_pro_image() -> str:
+    if _is_local_microk8s_mode():
+        return _resolve_image(LOCAL_IMAGE_NAME_CODER_PRO, "LOCAL_IMAGE_NAME_CODER_PRO")
+    return _resolve_image(IMAGE_NAME_CODER_PRO, "IMAGE_NAME_CODER_PRO")
+
+
+def _get_image_pull_policy() -> str | None:
+    if _is_local_microk8s_mode():
+        return "Never"
+    return None
 
 
 def _session_resource_names(session_id: str) -> dict[str, str]:
@@ -180,34 +200,35 @@ def _build_pod(
             )
         )
 
+    container = client.V1Container(
+        name=f"{role}-container",
+        image=image,
+        image_pull_policy=_get_image_pull_policy(),
+        volume_mounts=volume_mounts,
+        env=[
+            client.V1EnvVar(name="TASK_ID", value=session_id),
+            client.V1EnvVar(name="SESSION_ROLE", value=role),
+            client.V1EnvVar(name="USER_ID", value=user_id),
+            client.V1EnvVar(name="AUTH_TOKEN", value=token),
+            client.V1EnvVar(name="AGENT_TIER", value="PRO"),
+            client.V1EnvVar(name="WORKER_BUILD_ID", value=WORKER_BUILD_ID),
+            client.V1EnvVar(name="CLIENT_ID", value=CLIENT_ID),
+            client.V1EnvVar(name="HATCHET_CLIENT_TOKEN", value=HATCHET_CLIENT_TOKEN),
+            client.V1EnvVar(name="HATCHET_CLIENT_HOST_PORT", value=HATCHET_CLIENT_HOST_PORT),
+            client.V1EnvVar(name="HATCHET_CLIENT_SERVER_URL", value=HATCHET_CLIENT_SERVER_URL),
+            client.V1EnvVar(name="HATCHET_CLIENT_TLS_STRATEGY", value=HATCHET_CLIENT_TLS_STRATEGY),
+            client.V1EnvVar(name="KEYCLOAK_URL", value=KEYCLOAK_URL),
+            client.V1EnvVar(name="KEYCLOAK_REALM", value=KEYCLOAK_REALM),
+            client.V1EnvVar(name="KEYCLOAK_CLIENT_SECRET", value=KEYCLOAK_CLIENT_SECRET),
+        ],
+    )
+
     return client.V1Pod(
         metadata=client.V1ObjectMeta(name=pod_name, labels=labels),
         spec=client.V1PodSpec(
             restart_policy="Never",
             node_name=node_name,
-            containers=[
-                client.V1Container(
-                    name=f"{role}-container",
-                    image=image,
-                    volume_mounts=volume_mounts,
-                    env=[
-                        client.V1EnvVar(name="TASK_ID", value=session_id),
-                        client.V1EnvVar(name="SESSION_ROLE", value=role),
-                        client.V1EnvVar(name="USER_ID", value=user_id),
-                        client.V1EnvVar(name="AUTH_TOKEN", value=token),
-                        client.V1EnvVar(name="AGENT_TIER", value="PRO"),
-                        client.V1EnvVar(name="CLIENT_ID", value=CLIENT_ID),
-                        client.V1EnvVar(name="HATCHET_CLIENT_TOKEN", value=HATCHET_CLIENT_TOKEN),
-                        client.V1EnvVar(name="HATCHET_CLIENT_HOST_PORT", value=HATCHET_CLIENT_SERVER_URL),
-                        client.V1EnvVar(name="HATCHET_CLIENT_SERVER_URL", value=HATCHET_CLIENT_SERVER_URL),
-                        client.V1EnvVar(name="HATCHET_CLIENT_TLS_STRATEGY", value="none"),
-                        client.V1EnvVar(name="KEYCLOAK_URL", value=KEYCLOAK_URL),
-                        client.V1EnvVar(name="KEYCLOAK_REALM", value=KEYCLOAK_REALM),
-                        client.V1EnvVar(name="KEYCLOAK_CLIENT_SECRET", value=KEYCLOAK_CLIENT_SECRET),
-
-                    ],
-                )
-            ],
+            containers=[container],
             volumes=volumes,
         ),
     )
@@ -223,12 +244,14 @@ def _pod_matches_spec(existing_pod: client.V1Pod, desired_pod: client.V1Pod) -> 
     existing_containers = existing_pod.spec.containers or []
     desired_containers = desired_pod.spec.containers or []
     if len(existing_containers) != len(desired_containers):
-        return FalseCLIENT_ID
+        return False
 
     for existing_container, desired_container in zip(existing_containers, desired_containers):
         if existing_container.name != desired_container.name:
             return False
         if existing_container.image != desired_container.image:
+            return False
+        if existing_container.image_pull_policy != desired_container.image_pull_policy:
             return False
         if _container_env_map(existing_container) != _container_env_map(desired_container):
             return False
@@ -485,7 +508,7 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
         user_id=user_id,
         role="pro",
         token=token,
-        image=_resolve_image(IMAGE_NAME_CODER_PRO, "IMAGE_NAME_CODER_PRO"),
+        image=_get_coder_pro_image(),
         own_pvc_name=pro_pvc_name,
     )
     _create_or_reuse_pod(v1, pro_pod_spec)
