@@ -27,6 +27,9 @@ HATCHET_CLIENT_HOST_PORT = os.getenv("HATCHET_CLIENT_HOST_PORT")
 HATCHET_CLIENT_SERVER_URL = os.getenv("HATCHET_CLIENT_SERVER_URL")
 HATCHET_CLIENT_TLS_STRATEGY = os.getenv("HATCHET_CLIENT_TLS_STRATEGY", "none")
 CLIENT_ID = os.getenv("CLIENT_ID", "agcode")
+KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
+KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "agcode")
+KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET")
 
 def _to_k8s_name_fragment(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
@@ -198,6 +201,9 @@ def _build_pod(
                         client.V1EnvVar(name="HATCHET_CLIENT_HOST_PORT", value=HATCHET_CLIENT_SERVER_URL),
                         client.V1EnvVar(name="HATCHET_CLIENT_SERVER_URL", value=HATCHET_CLIENT_SERVER_URL),
                         client.V1EnvVar(name="HATCHET_CLIENT_TLS_STRATEGY", value="none"),
+                        client.V1EnvVar(name="KEYCLOAK_URL", value=KEYCLOAK_URL),
+                        client.V1EnvVar(name="KEYCLOAK_REALM", value=KEYCLOAK_REALM),
+                        client.V1EnvVar(name="KEYCLOAK_CLIENT_SECRET", value=KEYCLOAK_CLIENT_SECRET),
 
                     ],
                 )
