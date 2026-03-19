@@ -94,6 +94,11 @@ class NoobWorkspacePrepStatus(BaseModel):
     ref: Optional[str] = None
 
 
+class NoobWorkspacePrepAcceptedResponse(BaseModel):
+    status: str
+    job_name: Optional[str] = None
+
+
 class NoobTaskRequest(BaseModel):
     instruction: str = Field(min_length=1)
     context_file_paths: List[str] = Field(default_factory=list)

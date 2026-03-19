@@ -4,6 +4,8 @@ from agcode_domain.errors import NoobSessionConflictError, NoobThreadNotFoundErr
 from agcode_domain.schema import (
     NoobSessionCreateRequest,
     NoobSessionInfo,
+    NoobWorkspacePrepSpec,
+    NoobWorkspacePrepRequest,
     NoobThreadCreateRequest,
     NoobThreadInfo,
     NoobThreadRequest,
@@ -79,9 +81,27 @@ def build_thread_task_request(thread: object, request: NoobThreadRequest) -> Noo
     return NoobTaskRequest(
         instruction=request.instruction,
         context_file_paths=request.context_file_paths,
-        workspace_path=request.workspace_path,
+        workspace_path=request.workspace_path or "workspace",
         output_file_path=request.output_file_path,
         system_prompt=request.system_prompt,
         model=request.model,
         thread_id=getattr(thread, "id"),
     )
+
+
+def resolve_prep_request(
+    repository: object,
+    *,
+    noob_session_id: str,
+    user_id: str,
+    request: NoobWorkspacePrepRequest | None,
+) -> NoobWorkspacePrepRequest:
+    session = get_owned_noob_session(repository, session_id=noob_session_id, user_id=user_id)
+    if request is not None:
+        return request
+
+    config = getattr(session, "config", {}) or {}
+    prep = config.get("prep")
+    if isinstance(prep, dict):
+        return NoobWorkspacePrepRequest(spec=NoobWorkspacePrepSpec.model_validate(prep))
+    raise ValueError(f"NOOB session {noob_session_id} does not have a stored prep spec")

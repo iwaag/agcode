@@ -36,8 +36,10 @@ class SessionRuntimeSettings:
     runtime_mode: str
     image_name_coder_pro: str | None
     image_name_coder_noob: str | None
+    image_name_coder_noob_prep: str | None
     local_image_name_coder_pro: str | None
     local_image_name_coder_noob: str | None
+    local_image_name_coder_noob_prep: str | None
     worker_build_id: str
     namespace: str
     storage_class_name: str
@@ -73,8 +75,10 @@ def get_session_runtime_settings() -> SessionRuntimeSettings:
         runtime_mode=os.getenv("SESSION_RUNTIME_MODE", "remote"),
         image_name_coder_pro=os.getenv("IMAGE_NAME_CODER_PRO"),
         image_name_coder_noob=os.getenv("IMAGE_NAME_CODER_NOOB"),
+        image_name_coder_noob_prep=os.getenv("IMAGE_NAME_CODER_NOOB_PREP"),
         local_image_name_coder_pro=os.getenv("LOCAL_IMAGE_NAME_CODER_PRO"),
         local_image_name_coder_noob=os.getenv("LOCAL_IMAGE_NAME_CODER_NOOB"),
+        local_image_name_coder_noob_prep=os.getenv("LOCAL_IMAGE_NAME_CODER_NOOB_PREP"),
         worker_build_id=os.getenv("WORKER_BUILD_ID", ""),
         namespace=os.getenv("SESSION_K8S_NAMESPACE", "default"),
         storage_class_name=os.getenv("SESSION_K8S_STORAGE_CLASS", "microk8s-hostpath"),

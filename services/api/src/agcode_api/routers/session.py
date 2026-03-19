@@ -15,12 +15,13 @@ from agcode_domain.schema import (
     NoobSessionInfo,
     NoobTaskAcceptedResponse,
     NoobTaskEvents,
-    NoobTaskRequest,
     NoobTaskResult,
     NoobTaskStatus,
     NoobThreadCreateRequest,
     NoobThreadInfo,
     NoobThreadRequest,
+    NoobWorkspacePrepAcceptedResponse,
+    NoobWorkspacePrepRequest,
     NoobWorkspacePrepStatus,
     SessionConfig,
     SessionInfo,
@@ -45,21 +46,6 @@ def _raise_http_session_error(exc: Exception) -> None:
     if isinstance(exc, NoobSessionConflictError):
         raise HTTPException(status_code=409, detail=str(exc))
     raise exc
-
-
-def _get_owned_noob_session_like(session_id: str, user_id: str) -> object:
-    try:
-        return noob_session_service.get_owned_noob_session(
-            db,
-            session_id=session_id,
-            user_id=user_id,
-        )
-    except SessionNotFoundError:
-        return session_service.get_owned_session(
-            db,
-            session_id=session_id,
-            user_id=user_id,
-        )
 
 
 @router.post("/new", summary="New task session")
@@ -94,9 +80,11 @@ async def open_noob_session(session_id: str, auth: AuthInfo = Depends(get_auth_i
             session_id=session_id,
             user_id=auth.user_id,
         )
-        await task_session.run_session(
+        workspace_status = await task_session.get_noob_workspace_status(session.id)
+        if workspace_status.status != "ready":
+            raise HTTPException(status_code=409, detail=f"NOOB workspace is not ready for session {session.id}")
+        await task_session.run_noob_session(
             session_id=session.id,
-            project_id=session.project_id,
             user_id=auth.user_id,
             token=auth.token,
         )
@@ -113,6 +101,36 @@ async def open_noob_session(session_id: str, auth: AuthInfo = Depends(get_auth_i
         )
     except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
         _raise_http_session_error(exc)
+
+
+@router.post("/noob/session/{session_id}/workspace/prepare", summary="Start NOOB workspace preparation")
+async def prepare_noob_workspace(
+    session_id: str,
+    request: NoobWorkspacePrepRequest | None = None,
+    auth: AuthInfo = Depends(get_auth_info),
+) -> NoobWorkspacePrepAcceptedResponse:
+    try:
+        prep_request = noob_session_service.resolve_prep_request(
+            db,
+            noob_session_id=session_id,
+            user_id=auth.user_id,
+            request=request,
+        )
+        status = await task_session.run_noob_workspace_prep(
+            session_id=session_id,
+            user_id=auth.user_id,
+            prep_request=prep_request,
+        )
+        return NoobWorkspacePrepAcceptedResponse(
+            status=status.status,
+            job_name=task_session.get_noob_prep_job_name(session_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
+        _raise_http_session_error(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/noob/session/{session_id}/thread", summary="Create or reuse the active NOOB chat thread")
@@ -155,6 +173,74 @@ async def submit_noob_thread_request(
         )
         db.update_noob_thread_status(thread_id, "running")
         return NoobTaskAcceptedResponse(status="accepted")
+    except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
+        _raise_http_session_error(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/noob/session/{session_id}/thread/{thread_id}/status", summary="Get NOOB worker status for a chat thread")
+async def get_noob_thread_status(
+    session_id: str,
+    thread_id: str,
+    auth: AuthInfo = Depends(get_auth_info),
+) -> NoobTaskStatus:
+    try:
+        noob_session_service.get_owned_noob_thread(
+            db,
+            noob_session_id=session_id,
+            thread_id=thread_id,
+            user_id=auth.user_id,
+        )
+        status = await task_session.get_noob_task_status(session_id)
+        db.update_noob_thread_status(thread_id, status.status)
+        return status
+    except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
+        _raise_http_session_error(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/noob/session/{session_id}/thread/{thread_id}/result", summary="Get NOOB worker result for a chat thread")
+async def get_noob_thread_result(
+    session_id: str,
+    thread_id: str,
+    auth: AuthInfo = Depends(get_auth_info),
+) -> NoobTaskResult:
+    try:
+        noob_session_service.get_owned_noob_thread(
+            db,
+            noob_session_id=session_id,
+            thread_id=thread_id,
+            user_id=auth.user_id,
+        )
+        result = await task_session.get_noob_task_result(session_id)
+        if result.exit_code == 0:
+            db.update_noob_thread_status(thread_id, "succeeded")
+        elif result.exit_code is not None or result.error:
+            db.update_noob_thread_status(thread_id, "failed")
+        return result
+    except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
+        _raise_http_session_error(exc)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/noob/session/{session_id}/thread/{thread_id}/events", summary="Get NOOB worker events for a chat thread")
+async def get_noob_thread_events(
+    session_id: str,
+    thread_id: str,
+    tail: int = 200,
+    auth: AuthInfo = Depends(get_auth_info),
+) -> NoobTaskEvents:
+    try:
+        noob_session_service.get_owned_noob_thread(
+            db,
+            noob_session_id=session_id,
+            thread_id=thread_id,
+            user_id=auth.user_id,
+        )
+        return await task_session.get_noob_task_events(session_id, tail=tail)
     except (SessionNotFoundError, SessionAccessDeniedError, NoobSessionConflictError, NoobThreadNotFoundError) as exc:
         _raise_http_session_error(exc)
     except RuntimeError as exc:
@@ -246,63 +332,5 @@ async def start_session_tunnel(session_id: str, auth: AuthInfo = Depends(get_aut
         raise HTTPException(status_code=502, detail=f"Tunnel worker request failed: {exc.response.status_code}") from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Tunnel worker is unreachable") from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.post("/{session_id}/noob/request", summary="Submit a NOOB worker request")
-async def submit_noob_request(
-    session_id: str,
-    request: NoobTaskRequest,
-    auth: AuthInfo = Depends(get_auth_info),
-) -> NoobTaskAcceptedResponse:
-    try:
-        session = _get_owned_noob_session_like(session_id, auth.user_id)
-        await task_session.submit_noob_task(
-            session_id=session.id,
-            user_id=auth.user_id,
-            token=auth.token,
-            request=request,
-        )
-        return NoobTaskAcceptedResponse(status="accepted")
-    except (SessionNotFoundError, SessionAccessDeniedError) as exc:
-        _raise_http_session_error(exc)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.get("/{session_id}/noob/status", summary="Get NOOB worker status")
-async def get_noob_status(session_id: str, auth: AuthInfo = Depends(get_auth_info)) -> NoobTaskStatus:
-    try:
-        session = _get_owned_noob_session_like(session_id, auth.user_id)
-        return await task_session.get_noob_task_status(session.id)
-    except (SessionNotFoundError, SessionAccessDeniedError) as exc:
-        _raise_http_session_error(exc)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.get("/{session_id}/noob/result", summary="Get NOOB worker result")
-async def get_noob_result(session_id: str, auth: AuthInfo = Depends(get_auth_info)) -> NoobTaskResult:
-    try:
-        session = _get_owned_noob_session_like(session_id, auth.user_id)
-        return await task_session.get_noob_task_result(session.id)
-    except (SessionNotFoundError, SessionAccessDeniedError) as exc:
-        _raise_http_session_error(exc)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@router.get("/{session_id}/noob/events", summary="Get NOOB worker events")
-async def get_noob_events(
-    session_id: str,
-    tail: int = 200,
-    auth: AuthInfo = Depends(get_auth_info),
-) -> NoobTaskEvents:
-    try:
-        session = _get_owned_noob_session_like(session_id, auth.user_id)
-        return await task_session.get_noob_task_events(session.id, tail=tail)
-    except (SessionNotFoundError, SessionAccessDeniedError) as exc:
-        _raise_http_session_error(exc)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
