@@ -3,13 +3,14 @@ import json
 import http.client
 import os
 import re
+import shlex
 import time
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from kubernetes.stream import portforward
+from kubernetes.stream import portforward, stream
 
-from agcode_domain.schema import SessionInfo, TunnelInfo
+from agcode_domain.schema import NoobTaskEvents, NoobTaskRequest, NoobTaskResult, NoobTaskStatus, SessionInfo, TunnelInfo
 from agcode_infra.config import get_session_runtime_settings
 from agcode_infra.db import database as db
 
@@ -37,6 +38,10 @@ CLIENT_ID = os.getenv("CLIENT_ID", "agcode")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "agcode")
 KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET")
+NOOB_REQUEST_PATH = f"{NOOB_MOUNT_PATH}/control/request.json"
+NOOB_STATUS_PATH = f"{NOOB_MOUNT_PATH}/state/status.json"
+NOOB_RESULT_PATH = f"{NOOB_MOUNT_PATH}/state/result.json"
+NOOB_EVENTS_PATH = f"{NOOB_MOUNT_PATH}/events/events.jsonl"
 
 
 def _is_local_microk8s_mode() -> bool:
@@ -426,14 +431,178 @@ def get_pro_service_name(session_id: str) -> str:
     return _session_resource_names(session_id)["pro_service_name"]
 
 
-def get_pro_realtime_socketio_base_url(session_id: str) -> str:
+def get_noob_pod_name(session_id: str) -> str:
+    return _session_resource_names(session_id)["noob_pod_name"]
+
+
+def _load_kube_v1() -> client.CoreV1Api:
+    config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
+    return client.CoreV1Api()
+
+
+def _get_session_or_raise(session_id: str) -> object:
     session_info = db.get_session(session_id)
     if session_info is None:
         raise ValueError(f"Session {session_id} not found")
+    return session_info
+
+
+def _get_noob_session_or_raise(session_id: str) -> object:
+    session_info = _get_session_or_raise(session_id)
+    if not _is_noob_session(session_info):
+        raise RuntimeError(f"Session {session_id} is not a NOOB session")
+    return session_info
+
+
+def _exec_in_pod(
+    v1: client.CoreV1Api,
+    *,
+    pod_name: str,
+    command: list[str],
+) -> str:
+    return stream(
+        v1.connect_get_namespaced_pod_exec,
+        pod_name,
+        NAMESPACE,
+        command=command,
+        stderr=True,
+        stdin=False,
+        stdout=True,
+        tty=False,
+    )
+
+
+def _read_optional_json_file(
+    v1: client.CoreV1Api,
+    *,
+    pod_name: str,
+    path: str,
+) -> dict:
+    content = _exec_in_pod(
+        v1,
+        pod_name=pod_name,
+        command=["sh", "-lc", f"if [ -f {shlex.quote(path)} ]; then cat {shlex.quote(path)}; fi"],
+    ).strip()
+    if not content:
+        return {}
+    return json.loads(content)
+
+
+def _read_optional_text_file(
+    v1: client.CoreV1Api,
+    *,
+    pod_name: str,
+    path: str,
+) -> str:
+    return _exec_in_pod(
+        v1,
+        pod_name=pod_name,
+        command=["sh", "-lc", f"if [ -f {shlex.quote(path)} ]; then cat {shlex.quote(path)}; fi"],
+    )
+
+
+def _write_text_file_atomic(
+    v1: client.CoreV1Api,
+    *,
+    pod_name: str,
+    path: str,
+    content: str,
+) -> None:
+    parent = os.path.dirname(path)
+    quoted_parent = shlex.quote(parent)
+    quoted_path = shlex.quote(path)
+    quoted_tmp_path = shlex.quote(f"{path}.tmp")
+    quoted_content = shlex.quote(content)
+    command = [
+        "sh",
+        "-lc",
+        (
+            f"mkdir -p {quoted_parent} && "
+            f"tmp={quoted_tmp_path} && "
+            f"printf %s {quoted_content} > \"$tmp\" && "
+            f"mv \"$tmp\" {quoted_path}"
+        ),
+    ]
+    _exec_in_pod(v1, pod_name=pod_name, command=command)
+
+
+def _submit_noob_request_file(v1: client.CoreV1Api, *, pod_name: str, request: NoobTaskRequest) -> None:
+    status = _read_optional_json_file(v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
+    current_status = status.get("status")
+    if current_status == "running":
+        raise RuntimeError("NOOB worker is already running a task")
+
+    request_payload = request.model_dump()
+    _write_text_file_atomic(
+        v1,
+        pod_name=pod_name,
+        path=NOOB_REQUEST_PATH,
+        content=json.dumps(request_payload, ensure_ascii=True, indent=2) + "\n",
+    )
+
+
+def get_pro_realtime_socketio_base_url(session_id: str) -> str:
+    session_info = _get_session_or_raise(session_id)
     if _is_noob_session(session_info):
         raise RuntimeError(f"Session {session_id} does not expose a realtime Socket.IO endpoint")
     service_name = get_pro_service_name(session_id)
     return f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{WORKER_PORT}"
+
+
+async def submit_noob_task(
+    session_id: str,
+    *,
+    user_id: str,
+    token: str,
+    request: NoobTaskRequest,
+) -> NoobTaskStatus:
+    _get_noob_session_or_raise(session_id)
+    await run_session(session_id=session_id, project_id="", user_id=user_id, token=token)
+    v1 = _load_kube_v1()
+    pod_name = get_noob_pod_name(session_id)
+    _wait_for_pod_ready(v1, pod_name)
+    await asyncio.to_thread(_submit_noob_request_file, v1, pod_name=pod_name, request=request)
+    return await get_noob_task_status(session_id)
+
+
+async def get_noob_task_status(session_id: str) -> NoobTaskStatus:
+    _get_noob_session_or_raise(session_id)
+    v1 = _load_kube_v1()
+    pod_name = get_noob_pod_name(session_id)
+    _wait_for_pod_ready(v1, pod_name)
+    payload = await asyncio.to_thread(_read_optional_json_file, v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
+    if not payload:
+        return NoobTaskStatus(status="unknown")
+    return NoobTaskStatus.model_validate(payload)
+
+
+async def get_noob_task_result(session_id: str) -> NoobTaskResult:
+    _get_noob_session_or_raise(session_id)
+    v1 = _load_kube_v1()
+    pod_name = get_noob_pod_name(session_id)
+    _wait_for_pod_ready(v1, pod_name)
+    payload = await asyncio.to_thread(_read_optional_json_file, v1, pod_name=pod_name, path=NOOB_RESULT_PATH)
+    if not payload:
+        return NoobTaskResult()
+    return NoobTaskResult.model_validate(payload)
+
+
+async def get_noob_task_events(session_id: str, tail: int = 200) -> NoobTaskEvents:
+    _get_noob_session_or_raise(session_id)
+    v1 = _load_kube_v1()
+    pod_name = get_noob_pod_name(session_id)
+    _wait_for_pod_ready(v1, pod_name)
+    content = await asyncio.to_thread(
+        _read_optional_text_file,
+        v1,
+        pod_name=pod_name,
+        path=NOOB_EVENTS_PATH,
+    )
+    lines = [line for line in content.splitlines() if line.strip()]
+    if tail > 0:
+        lines = lines[-tail:]
+    events = [json.loads(line) for line in lines]
+    return NoobTaskEvents.model_validate({"events": events})
 
 
 def _post_json_via_pod_portforward(

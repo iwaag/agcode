@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
@@ -12,6 +12,10 @@ const controlDir = path.join(sessionRoot, "control");
 const eventsDir = path.join(sessionRoot, "events");
 const stateDir = path.join(sessionRoot, "state");
 const artifactsDir = path.join(sessionRoot, "artifacts");
+const requestPath = path.join(controlDir, "request.json");
+const requestProcessingPath = path.join(controlDir, "request.processing.json");
+const eventsPath = path.join(eventsDir, "events.jsonl");
+const resultPath = path.join(stateDir, "result.json");
 
 function nowIso() {
   return new Date().toISOString();
@@ -30,9 +34,7 @@ async function writeJsonAtomic(targetPath, payload) {
 }
 
 async function appendEvent(payload) {
-  const requestId = payload.request_id || "session";
-  const eventPath = path.join(eventsDir, `event-${requestId}.jsonl`);
-  await appendFile(eventPath, `${JSON.stringify({ timestamp: nowIso(), ...payload })}\n`, "utf8");
+  await appendFile(eventsPath, `${JSON.stringify({ timestamp: nowIso(), ...payload })}\n`, "utf8");
 }
 
 async function updateStatus(status, extra = {}) {
@@ -50,23 +52,9 @@ async function updateHeartbeat() {
   });
 }
 
-async function listPendingRequests() {
-  const entries = await readdir(controlDir);
-  return entries
-    .filter((name) => name.startsWith("request-") && name.endsWith(".json"))
-    .sort();
-}
-
-async function claimRequestFile(fileName) {
-  const sourcePath = path.join(controlDir, fileName);
-  const claimedName = `${fileName}.working-${process.pid}`;
-  const claimedPath = path.join(controlDir, claimedName);
-  await rename(sourcePath, claimedPath);
-  return claimedPath;
-}
-
-async function markRequestDone(claimedPath) {
-  await rename(claimedPath, `${claimedPath}.done`);
+async function claimRequestFile() {
+  await rename(requestPath, requestProcessingPath);
+  return requestProcessingPath;
 }
 
 function buildAgentInvocation(request) {
@@ -79,11 +67,27 @@ function buildAgentInvocation(request) {
     return { command: request.command, args };
   }
 
-  const prompt = typeof request.user_prompt === "string" ? request.user_prompt : "";
+  const prompt = buildPrompt(request);
   if (prompt.length === 0) {
-    throw new Error("request must include argv, command, or user_prompt");
+    throw new Error("request must include instruction, argv, or command");
   }
   return { command: agentCommand, args: [prompt] };
+}
+
+function buildPrompt(request) {
+  const parts = [];
+  if (typeof request.system_prompt === "string" && request.system_prompt.length > 0) {
+    parts.push(request.system_prompt);
+  }
+  parts.push("Work inside the mounted workspace and write the final response to the requested output file.");
+  parts.push(`Instruction:\n${request.instruction || ""}`);
+  if (Array.isArray(request.context_file_paths) && request.context_file_paths.length > 0) {
+    parts.push(`Reference files to read:\n${request.context_file_paths.join("\n")}`);
+  }
+  if (typeof request.output_file_path === "string" && request.output_file_path.length > 0) {
+    parts.push(`Write the final deliverable to:\n${request.output_file_path}`);
+  }
+  return parts.join("\n\n").trim();
 }
 
 async function resolveWorkingDirectory(request) {
@@ -98,20 +102,23 @@ async function resolveWorkingDirectory(request) {
   return candidate;
 }
 
-async function runRequest(request, claimedPath) {
-  const requestId = request.request_id || path.basename(claimedPath, path.extname(claimedPath));
-  const stdoutPath = path.join(artifactsDir, `${requestId}.stdout.log`);
-  const stderrPath = path.join(artifactsDir, `${requestId}.stderr.log`);
-  const resultPath = path.join(stateDir, `result-${requestId}.json`);
+async function runRequest(request) {
+  const stdoutPath = path.join(artifactsDir, "stdout.log");
+  const stderrPath = path.join(artifactsDir, "stderr.log");
   const cwd = await resolveWorkingDirectory(request);
   const invocation = buildAgentInvocation(request);
+  const outputPath = path.isAbsolute(request.output_file_path || "")
+    ? request.output_file_path
+    : path.join(sessionRoot, request.output_file_path || "artifacts/response.md");
+  await mkdir(path.dirname(outputPath), { recursive: true });
 
-  await appendEvent({ type: "accepted", request_id: requestId, session_id: process.env.TASK_ID || null });
-  await updateStatus("running", { request_id: requestId });
+  await writeFile(eventsPath, "", "utf8");
+  await rm(resultPath, { force: true });
+  await appendEvent({ type: "accepted", session_id: process.env.TASK_ID || null });
+  await updateStatus("running");
   await appendEvent({
     type: "started",
-    request_id: requestId,
-    payload: { command: invocation.command, args: invocation.args, cwd },
+    payload: { command: invocation.command, args: invocation.args, cwd, output_path: outputPath },
   });
 
   await writeFile(stdoutPath, "", "utf8");
@@ -131,13 +138,13 @@ async function runRequest(request, claimedPath) {
   child.stdout.on("data", async (chunk) => {
     const text = chunk.toString("utf8");
     await appendFile(stdoutPath, text, "utf8");
-    await appendEvent({ type: "stdout", request_id: requestId, payload: { text } });
+    await appendEvent({ type: "stdout", payload: { text } });
   });
 
   child.stderr.on("data", async (chunk) => {
     const text = chunk.toString("utf8");
     await appendFile(stderrPath, text, "utf8");
-    await appendEvent({ type: "stderr", request_id: requestId, payload: { text } });
+    await appendEvent({ type: "stderr", payload: { text } });
   });
 
   const exitCode = await new Promise((resolve, reject) => {
@@ -146,34 +153,33 @@ async function runRequest(request, claimedPath) {
   });
 
   const resultPayload = {
-    request_id: requestId,
     exit_code: exitCode,
     completed_at: nowIso(),
+    output_path: outputPath,
     stdout_path: stdoutPath,
     stderr_path: stderrPath,
   };
+  try {
+    resultPayload.content = await readFile(outputPath, "utf8");
+  } catch {
+    resultPayload.content = null;
+  }
   await writeJsonAtomic(resultPath, resultPayload);
 
   if (exitCode === 0) {
-    await appendEvent({ type: "completed", request_id: requestId, payload: resultPayload });
-    await updateStatus("idle", { request_id: requestId });
+    await appendEvent({ type: "completed", payload: resultPayload });
+    await updateStatus("succeeded", { exit_code: 0 });
     return;
   }
 
-  await appendEvent({ type: "failed", request_id: requestId, payload: resultPayload });
-  await updateStatus("failed", { request_id: requestId, exit_code: exitCode });
+  await appendEvent({ type: "failed", payload: resultPayload });
+  await updateStatus("failed", { exit_code: exitCode });
 }
 
 async function pollOnce() {
-  const pending = await listPendingRequests();
-  if (pending.length === 0) {
-    return;
-  }
-
-  const fileName = pending[0];
   let claimedPath;
   try {
-    claimedPath = await claimRequestFile(fileName);
+    claimedPath = await claimRequestFile();
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return;
@@ -185,17 +191,17 @@ async function pollOnce() {
   const request = JSON.parse(raw);
 
   try {
-    await runRequest(request, claimedPath);
+    await runRequest(request);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await appendEvent({
       type: "failed",
-      request_id: request.request_id || fileName,
       payload: { error: message },
     });
-    await updateStatus("failed", { request_id: request.request_id || fileName, error: message });
+    await writeJsonAtomic(resultPath, { error: message, completed_at: nowIso() });
+    await updateStatus("failed", { error: message });
   } finally {
-    await markRequestDone(claimedPath);
+    await rm(claimedPath, { force: true });
   }
 }
 
