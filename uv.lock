@@ -42,8 +42,8 @@ requires-dist = [
 
 [[package]]
 name = "agpyutils"
-version = "0.1.38"
-source = { git = "https://github.com/iwaag/agpyutils.git?rev=main#55c48540a5481729894b3976a4a79ffcfd924af3" }
+version = "0.1.39"
+source = { git = "https://github.com/iwaag/agpyutils.git?rev=main#69aa8ab335745df5d784ff7862a97705608d822c" }
 dependencies = [
     { name = "cryptography" },
     { name = "fastapi" },

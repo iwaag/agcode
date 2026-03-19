@@ -38,9 +38,10 @@ class TunnelStartResult:
 
 
 def _extract_device_login(log_content: str) -> DeviceLoginPrompt | None:
-    match = _DEVICE_LOGIN_PATTERN.search(log_content)
-    if match is None:
+    matches = list(_DEVICE_LOGIN_PATTERN.finditer(log_content))
+    if not matches:
         return None
+    match = matches[-1]
     return DeviceLoginPrompt(url=match.group(1), code=match.group(2))
 
 
@@ -120,10 +121,11 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
             return TunnelStartResult(status="ok", pid=proc.pid, tunnel_name=tunnel_name)
         prompt = _extract_device_login(log_content)
         if prompt is not None:
+            hints = {"code": prompt.code}
             task_hub.request_labor_auth(
                 task=task_models.Task_UnmanagedLabor(
                     meta=task_models.TaskMetadata(type_id="code_auth", user_id=my_auth_info.user_id, project_id=""),
-                    redirect_url=prompt.url, wait_for=timedelta(seconds=5)
+                    redirect_url=prompt.url, wait_for=timedelta(minutes=5), hints=hints
                 )
             )
             return TunnelStartResult(

@@ -409,7 +409,7 @@ def _post_json_via_pod_portforward(
     sock.settimeout(timeout)
     print(f"[start_tunnel] acquired port-forward socket for pod={pod_name} port={WORKER_PORT}")
 
-    connection = http.client.HTTPConnection("192.168.0.120", WORKER_PORT, timeout=timeout)
+    connection = http.client.HTTPConnection("100.87.94.9", WORKER_PORT, timeout=timeout)
     connection.sock = sock
     try:
         print(f"[start_tunnel] sending HTTP request to worker via port-forward: path={path}")
@@ -468,6 +468,7 @@ async def start_tunnel(session_id: str, tunnel_name: str, token: str) -> TunnelI
     )
     print(f"[start_tunnel] waiting for pod readiness: pod={pod_name}")
     _wait_for_pod_ready(v1, pod_name)
+    await asyncio.sleep(2)
     print(f"[start_tunnel] pod is ready: pod={pod_name}")
     status_code, payload = await asyncio.to_thread(
         _post_json_via_pod_portforward,
