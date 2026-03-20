@@ -1,0 +1,1 @@
+start_tunnel_endpointの返り値をの型を一つにして、パラメータはstatusとtunnel_nameのみにする。redirect_urlやcodeはtaskチケットとして発行する仕組みがすでに入ってるの絵

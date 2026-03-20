@@ -1,14 +1,10 @@
 import asyncio
-import json
 import http.client
-import os
-import re
-import shlex
-import time
+import json
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from kubernetes.stream import portforward, stream
+from kubernetes.stream import portforward
 
 from agcode_domain.schema import (
     NoobTaskEvents,
@@ -20,514 +16,66 @@ from agcode_domain.schema import (
     SessionInfo,
     TunnelInfo,
 )
-from agcode_infra.config import get_session_runtime_settings
 from agcode_infra.db import database as db
 
-SETTINGS = get_session_runtime_settings()
-RUNTIME_MODE = SETTINGS.runtime_mode
-IMAGE_NAME_CODER_PRO = SETTINGS.image_name_coder_pro
-IMAGE_NAME_CODER_NOOB = SETTINGS.image_name_coder_noob
-IMAGE_NAME_CODER_NOOB_PREP = SETTINGS.image_name_coder_noob_prep
-LOCAL_IMAGE_NAME_CODER_PRO = SETTINGS.local_image_name_coder_pro
-LOCAL_IMAGE_NAME_CODER_NOOB = SETTINGS.local_image_name_coder_noob
-LOCAL_IMAGE_NAME_CODER_NOOB_PREP = SETTINGS.local_image_name_coder_noob_prep
-WORKER_BUILD_ID = SETTINGS.worker_build_id
-NAMESPACE = SETTINGS.namespace
-STORAGE_CLASS_NAME = SETTINGS.storage_class_name
-PVC_SIZE = SETTINGS.pvc_size
-SCHEDULING_TIMEOUT_SECONDS = SETTINGS.scheduling_timeout_seconds
-WORKER_PORT = SETTINGS.worker_port
-WORKER_SOCKETIO_PATH = SETTINGS.worker_socketio_path
-REMOTE_CONFIG_PATH = SETTINGS.remote_config_path
-NOOB_RUNTIME_CLASS_NAME = SETTINGS.noob_runtime_class_name
-NOOB_MOUNT_PATH = SETTINGS.noob_mount_path
-HATCHET_CLIENT_TOKEN = os.getenv("HATCHET_CLIENT_TOKEN")
-HATCHET_CLIENT_HOST_PORT = os.getenv("HATCHET_CLIENT_HOST_PORT")
-HATCHET_CLIENT_SERVER_URL = os.getenv("HATCHET_CLIENT_SERVER_URL")
-HATCHET_CLIENT_TLS_STRATEGY = os.getenv("HATCHET_CLIENT_TLS_STRATEGY", "none")
-CLIENT_ID = os.getenv("CLIENT_ID", "agcode")
-KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://localhost:8080")
-KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "agcode")
-KEYCLOAK_CLIENT_SECRET = os.getenv("KEYCLOAK_CLIENT_SECRET")
-NOOB_REQUEST_PATH = f"{NOOB_MOUNT_PATH}/control/request.json"
-NOOB_STATUS_PATH = f"{NOOB_MOUNT_PATH}/state/status.json"
-NOOB_RESULT_PATH = f"{NOOB_MOUNT_PATH}/state/result.json"
-NOOB_EVENTS_PATH = f"{NOOB_MOUNT_PATH}/events/events.jsonl"
-
-
-def _is_local_microk8s_mode() -> bool:
-    return RUNTIME_MODE == "local_microk8s"
-
-
-def _to_k8s_name_fragment(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    if not normalized:
-        raise ValueError("Kubernetes resource name fragment cannot be empty")
-    return normalized
-
-
-def _resolve_image(image_name: str | None, env_name: str) -> str:
-    if not image_name:
-        raise ValueError(f"{env_name} is not set")
-    if "@" in image_name:
-        return image_name
-
-    last_segment = image_name.rsplit("/", 1)[-1]
-    if ":" in last_segment:
-        return image_name
-
-    return f"{image_name}:latest"
-
-
-def _get_coder_pro_image() -> str:
-    if _is_local_microk8s_mode():
-        return _resolve_image(LOCAL_IMAGE_NAME_CODER_PRO, "LOCAL_IMAGE_NAME_CODER_PRO")
-    return _resolve_image(IMAGE_NAME_CODER_PRO, "IMAGE_NAME_CODER_PRO")
-
-
-def _get_coder_noob_image() -> str:
-    if _is_local_microk8s_mode():
-        return _resolve_image(LOCAL_IMAGE_NAME_CODER_NOOB, "LOCAL_IMAGE_NAME_CODER_NOOB")
-    return _resolve_image(IMAGE_NAME_CODER_NOOB, "IMAGE_NAME_CODER_NOOB")
-
-
-def _get_coder_noob_prep_image() -> str:
-    if _is_local_microk8s_mode():
-        return _resolve_image(LOCAL_IMAGE_NAME_CODER_NOOB_PREP, "LOCAL_IMAGE_NAME_CODER_NOOB_PREP")
-    return _resolve_image(IMAGE_NAME_CODER_NOOB_PREP, "IMAGE_NAME_CODER_NOOB_PREP")
-
-
-def _get_image_pull_policy() -> str | None:
-    if _is_local_microk8s_mode():
-        return "Never"
-    return None
-
-
-def _session_resource_names(session_id: str) -> dict[str, str]:
-    task_name = _to_k8s_name_fragment(session_id)
-    return {
-        "pro_pvc_name": f"pvc-session-{task_name}-pro",
-        "pro_pod_name": f"worker-session-{task_name}-pro",
-        "pro_service_name": f"svc-session-{task_name}-pro",
-        "noob_pvc_name": f"pvc-session-{task_name}-noob",
-        "noob_pod_name": f"worker-session-{task_name}-noob",
-        "noob_prep_job_name": f"workspace-prep-{task_name}-noob",
-    }
-
-
-def _ensure_pvc(v1: client.CoreV1Api, pvc_name: str) -> None:
-    try:
-        v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
-        print(f"PVC {pvc_name} already exists. Reusing...")
-    except ApiException as e:
-        if e.status != 404:
-            raise
-        print(f"PVC {pvc_name} not found. Creating new one...")
-        pvc_body = client.V1PersistentVolumeClaim(
-            metadata=client.V1ObjectMeta(name=pvc_name),
-            spec=client.V1PersistentVolumeClaimSpec(
-                access_modes=["ReadWriteOnce"],
-                resources=client.V1ResourceRequirements(requests={"storage": PVC_SIZE}),
-                storage_class_name=STORAGE_CLASS_NAME,
-            ),
-        )
-        v1.create_namespaced_persistent_volume_claim(namespace=NAMESPACE, body=pvc_body)
-
-
-def _wait_for_pvc_bound(v1: client.CoreV1Api, pvc_name: str) -> None:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        pvc = v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
-        if pvc.status.phase == "Bound":
-            return
-        time.sleep(1)
-
-    pvc = v1.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=NAMESPACE)
-    raise TimeoutError(
-        f"PVC {pvc_name} was not bound within {SCHEDULING_TIMEOUT_SECONDS} seconds "
-        f"(phase={pvc.status.phase})"
-    )
-
-
-def _ensure_service(
-    v1: client.CoreV1Api,
-    *,
-    service_name: str,
-    selector: dict[str, str],
-    port: int = WORKER_PORT,
-) -> None:
-    try:
-        v1.read_namespaced_service(name=service_name, namespace=NAMESPACE)
-        print(f"Service {service_name} already exists. Reusing...")
-        return
-    except ApiException as e:
-        if e.status != 404:
-            raise
-
-    print(f"Service {service_name} not found. Creating new one...")
-    service_body = client.V1Service(
-        metadata=client.V1ObjectMeta(name=service_name),
-        spec=client.V1ServiceSpec(
-            selector=selector,
-            ports=[
-                client.V1ServicePort(
-                    name="ws",
-                    port=port,
-                    target_port=port,
-                    protocol="TCP",
-                )
-            ],
-            type="ClusterIP",
-        ),
-    )
-    v1.create_namespaced_service(namespace=NAMESPACE, body=service_body)
-
-
-def _build_pod(
-    *,
-    pod_name: str,
-    session_id: str,
-    user_id: str,
-    token: str,
-    role: str,
-    image: str,
-    own_pvc_name: str,
-    own_mount_path: str = "/mnt/data",
-    peer_pvc_name: str | None = None,
-    peer_mount_path: str = "/mnt/peer-data",
-    node_name: str | None = None,
-    runtime_class_name: str | None = None,
-    security_context: client.V1SecurityContext | None = None,
-    extra_env: list[client.V1EnvVar] | None = None,
-) -> client.V1Pod:
-    labels = {
-        "task-id": session_id,
-        "user-id": user_id,
-        "type": "session-worker",
-        "role": role,
-    }
-    volume_mounts = [
-        client.V1VolumeMount(
-            name="own-task-data",
-            mount_path=own_mount_path,
-            read_only=False,
-        ),
-    ]
-    volumes = [
-        client.V1Volume(
-            name="own-task-data",
-            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                claim_name=own_pvc_name,
-                read_only=False,
-            ),
-        ),
-    ]
-    if peer_pvc_name is not None:
-        volume_mounts.append(
-            client.V1VolumeMount(
-                name="peer-task-data",
-                mount_path=peer_mount_path,
-                read_only=True,
-            )
-        )
-        volumes.append(
-            client.V1Volume(
-                name="peer-task-data",
-                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                    claim_name=peer_pvc_name,
-                    read_only=True,
-                ),
-            )
-        )
-
-    env = [
-        client.V1EnvVar(name="TASK_ID", value=session_id),
-        client.V1EnvVar(name="SESSION_ROLE", value=role),
-        client.V1EnvVar(name="USER_ID", value=user_id),
-        client.V1EnvVar(name="AUTH_TOKEN", value=token),
-        client.V1EnvVar(name="WORKER_BUILD_ID", value=WORKER_BUILD_ID),
-        client.V1EnvVar(name="CLIENT_ID", value=CLIENT_ID),
-        client.V1EnvVar(name="HATCHET_CLIENT_TOKEN", value=HATCHET_CLIENT_TOKEN),
-        client.V1EnvVar(name="HATCHET_CLIENT_HOST_PORT", value=HATCHET_CLIENT_HOST_PORT),
-        client.V1EnvVar(name="HATCHET_CLIENT_SERVER_URL", value=HATCHET_CLIENT_SERVER_URL),
-        client.V1EnvVar(name="HATCHET_CLIENT_TLS_STRATEGY", value=HATCHET_CLIENT_TLS_STRATEGY),
-        client.V1EnvVar(name="KEYCLOAK_URL", value=KEYCLOAK_URL),
-        client.V1EnvVar(name="KEYCLOAK_REALM", value=KEYCLOAK_REALM),
-        client.V1EnvVar(name="KEYCLOAK_CLIENT_SECRET", value=KEYCLOAK_CLIENT_SECRET),
-    ]
-    if extra_env:
-        env.extend(extra_env)
-
-    container = client.V1Container(
-        name=f"{role}-container",
-        image=image,
-        image_pull_policy=_get_image_pull_policy(),
-        volume_mounts=volume_mounts,
-        env=env,
-        security_context=security_context,
-    )
-
-    return client.V1Pod(
-        metadata=client.V1ObjectMeta(name=pod_name, labels=labels),
-        spec=client.V1PodSpec(
-            restart_policy="Never",
-            node_name=node_name,
-            containers=[container],
-            volumes=volumes,
-            runtime_class_name=runtime_class_name,
-        ),
-    )
-
-
-def _build_noob_security_context() -> client.V1SecurityContext:
-    return client.V1SecurityContext(
-        allow_privilege_escalation=False,
-        read_only_root_filesystem=True,
-        run_as_non_root=True,
-        capabilities=client.V1Capabilities(drop=["ALL"]),
-    )
-
-
-def _container_env_map(container: client.V1Container | None) -> dict[str, str | None]:
-    if container is None or not container.env:
-        return {}
-    return {env.name: env.value for env in container.env}
-
-
-def _pod_matches_spec(existing_pod: client.V1Pod, desired_pod: client.V1Pod) -> bool:
-    if existing_pod.spec.runtime_class_name != desired_pod.spec.runtime_class_name:
-        return False
-    existing_containers = existing_pod.spec.containers or []
-    desired_containers = desired_pod.spec.containers or []
-    if len(existing_containers) != len(desired_containers):
-        return False
-
-    for existing_container, desired_container in zip(existing_containers, desired_containers):
-        if existing_container.name != desired_container.name:
-            return False
-        if existing_container.image != desired_container.image:
-            return False
-        if existing_container.image_pull_policy != desired_container.image_pull_policy:
-            return False
-        if _container_env_map(existing_container) != _container_env_map(desired_container):
-            return False
-
-    return True
-
-
-def _wait_for_pod_deleted(v1: client.CoreV1Api, pod_name: str) -> None:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        try:
-            v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-        except ApiException as e:
-            if e.status == 404:
-                return
-            raise
-        time.sleep(1)
-
-    raise TimeoutError(f"Pod {pod_name} was not deleted within {SCHEDULING_TIMEOUT_SECONDS} seconds")
-
-
-def _read_pod_if_exists(v1: client.CoreV1Api, pod_name: str) -> client.V1Pod | None:
-    try:
-        return v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-    except ApiException as e:
-        if e.status == 404:
-            return None
-        raise
-
-
-def _create_or_reuse_pod(v1: client.CoreV1Api, pod_spec: client.V1Pod) -> client.V1Pod:
-    pod_name = pod_spec.metadata.name
-    try:
-        pod = v1.create_namespaced_pod(namespace=NAMESPACE, body=pod_spec)
-        print(f"Pod {pod_name} created successfully.")
-        return pod
-    except ApiException as e:
-        if e.status == 409:
-            existing_pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-            if _pod_matches_spec(existing_pod, pod_spec):
-                print(f"Pod {pod_name} already exists. Reusing...")
-                return existing_pod
-
-            print(f"Pod {pod_name} already exists, but image/env changed. Recreating...")
-            v1.delete_namespaced_pod(
-                name=pod_name,
-                namespace=NAMESPACE,
-                grace_period_seconds=0,
-            )
-            _wait_for_pod_deleted(v1, pod_name)
-            pod = v1.create_namespaced_pod(namespace=NAMESPACE, body=pod_spec)
-            print(f"Pod {pod_name} recreated successfully.")
-            return pod
-        raise
-
-
-def _wait_for_node_assignment(v1: client.CoreV1Api, pod_name: str) -> str:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-        node_name = pod.spec.node_name
-        if node_name:
-            return node_name
-        time.sleep(1)
-
-    raise TimeoutError(f"Pod {pod_name} was not scheduled within {SCHEDULING_TIMEOUT_SECONDS} seconds")
-
-
-def _wait_for_pod_ready(v1: client.CoreV1Api, pod_name: str) -> None:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-        phase = pod.status.phase
-
-        if phase in ("Failed", "Unknown"):
-            conditions = pod.status.conditions or []
-            reason = pod.status.reason or "unknown"
-            message = pod.status.message or ""
-            conditions_str = ", ".join(
-                f"{c.type}={c.status}({c.reason})" for c in conditions if c.reason
-            )
-            raise RuntimeError(
-                f"Pod {pod_name} entered terminal phase {phase}: "
-                f"reason={reason} message={message} conditions=[{conditions_str}]"
-            )
-
-        if phase == "Running":
-            for condition in pod.status.conditions or []:
-                if condition.type == "Ready" and condition.status == "True":
-                    return
-
-        time.sleep(1)
-
-    pod = v1.read_namespaced_pod(name=pod_name, namespace=NAMESPACE)
-    phase = pod.status.phase
-    conditions = pod.status.conditions or []
-    conditions_str = ", ".join(
-        f"{c.type}={c.status}(reason={c.reason}, msg={c.message})" for c in conditions
-    )
-    container_statuses = pod.status.container_statuses or []
-    container_info = []
-    for cs in container_statuses:
-        state = cs.state
-        if state.waiting:
-            container_info.append(f"{cs.name}: waiting reason={state.waiting.reason} msg={state.waiting.message}")
-        elif state.terminated:
-            container_info.append(f"{cs.name}: terminated reason={state.terminated.reason} exit={state.terminated.exit_code}")
-        else:
-            container_info.append(f"{cs.name}: running")
-    raise TimeoutError(
-        f"Pod {pod_name} was not ready within {SCHEDULING_TIMEOUT_SECONDS} seconds "
-        f"(phase={phase}, conditions=[{conditions_str}], containers=[{', '.join(container_info)}])"
-    )
-
-
-def _job_env_map(container: client.V1Container | None) -> dict[str, str | None]:
-    if container is None or not container.env:
-        return {}
-    return {env.name: env.value for env in container.env}
-
-
-def _job_matches_spec(existing_job: client.V1Job, desired_job: client.V1Job) -> bool:
-    existing_template = existing_job.spec.template
-    desired_template = desired_job.spec.template
-    existing_containers = existing_template.spec.containers or []
-    desired_containers = desired_template.spec.containers or []
-    if len(existing_containers) != len(desired_containers):
-        return False
-
-    for existing_container, desired_container in zip(existing_containers, desired_containers):
-        if existing_container.name != desired_container.name:
-            return False
-        if existing_container.image != desired_container.image:
-            return False
-        if existing_container.image_pull_policy != desired_container.image_pull_policy:
-            return False
-        if _job_env_map(existing_container) != _job_env_map(desired_container):
-            return False
-
-    return True
-
-
-def _wait_for_job_deleted(batch_v1: client.BatchV1Api, job_name: str) -> None:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        try:
-            batch_v1.read_namespaced_job(name=job_name, namespace=NAMESPACE)
-        except ApiException as e:
-            if e.status == 404:
-                return
-            raise
-        time.sleep(1)
-    raise TimeoutError(f"Job {job_name} was not deleted within {SCHEDULING_TIMEOUT_SECONDS} seconds")
-
-
-def _create_or_reuse_job(batch_v1: client.BatchV1Api, job_spec: client.V1Job) -> client.V1Job:
-    job_name = job_spec.metadata.name
-    try:
-        job = batch_v1.create_namespaced_job(namespace=NAMESPACE, body=job_spec)
-        print(f"Job {job_name} created successfully.")
-        return job
-    except ApiException as e:
-        if e.status != 409:
-            raise
-        existing_job = batch_v1.read_namespaced_job(name=job_name, namespace=NAMESPACE)
-        if _job_matches_spec(existing_job, job_spec):
-            active = (existing_job.status.active or 0) > 0
-            succeeded = (existing_job.status.succeeded or 0) > 0
-            if active:
-                print(f"Job {job_name} already exists and is still running. Reusing...")
-                return existing_job
-            if succeeded:
-                print(f"Job {job_name} already exists and succeeded. Recreating for a fresh prep run...")
-            else:
-                print(f"Job {job_name} already exists and will be recreated.")
-        batch_v1.delete_namespaced_job(
-            name=job_name,
-            namespace=NAMESPACE,
-            propagation_policy="Background",
-        )
-        _wait_for_job_deleted(batch_v1, job_name)
-        job = batch_v1.create_namespaced_job(namespace=NAMESPACE, body=job_spec)
-        print(f"Job {job_name} recreated successfully.")
-        return job
-
-
-def _wait_for_service_endpoints(v1: client.CoreV1Api, service_name: str) -> None:
-    deadline = time.time() + SCHEDULING_TIMEOUT_SECONDS
-    while time.time() < deadline:
-        endpoints = v1.read_namespaced_endpoints(name=service_name, namespace=NAMESPACE)
-        for subset in endpoints.subsets or []:
-            if subset.addresses:
-                return
-        time.sleep(1)
-
-    raise TimeoutError(
-        f"Service {service_name} had no ready endpoints within {SCHEDULING_TIMEOUT_SECONDS} seconds"
-    )
-
-
-def get_pro_service_name(session_id: str) -> str:
-    return _session_resource_names(session_id)["pro_service_name"]
-
-
-def get_noob_pod_name(session_id: str) -> str:
-    return _session_resource_names(session_id)["noob_pod_name"]
-
-
-def get_noob_prep_job_name(session_id: str) -> str:
-    return _session_resource_names(session_id)["noob_prep_job_name"]
-
-
-def _load_kube_v1() -> client.CoreV1Api:
-    config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
-    return client.CoreV1Api()
-
-
-def _load_kube_batch_v1() -> client.BatchV1Api:
-    config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
-    return client.BatchV1Api()
+from .session_k8s_config import (
+    CLIENT_ID,
+    HATCHET_CLIENT_HOST_PORT,
+    HATCHET_CLIENT_SERVER_URL,
+    HATCHET_CLIENT_TLS_STRATEGY,
+    HATCHET_CLIENT_TOKEN,
+    IMAGE_NAME_CODER_NOOB,
+    IMAGE_NAME_CODER_NOOB_PREP,
+    IMAGE_NAME_CODER_PRO,
+    KEYCLOAK_CLIENT_SECRET,
+    KEYCLOAK_REALM,
+    KEYCLOAK_URL,
+    LOCAL_IMAGE_NAME_CODER_NOOB,
+    LOCAL_IMAGE_NAME_CODER_NOOB_PREP,
+    LOCAL_IMAGE_NAME_CODER_PRO,
+    NAMESPACE,
+    NOOB_EVENTS_PATH,
+    NOOB_MOUNT_PATH,
+    NOOB_REQUEST_PATH,
+    NOOB_RESULT_PATH,
+    NOOB_RUNTIME_CLASS_NAME,
+    NOOB_STATUS_PATH,
+    PVC_SIZE,
+    REMOTE_CONFIG_PATH,
+    RUNTIME_MODE,
+    SCHEDULING_TIMEOUT_SECONDS,
+    STORAGE_CLASS_NAME,
+    WORKER_BUILD_ID,
+    WORKER_PORT,
+    WORKER_SOCKETIO_PATH,
+    get_coder_noob_image,
+    get_coder_pro_image,
+    get_noob_pod_name,
+    get_noob_prep_job_name,
+    get_pro_service_name,
+    session_resource_names,
+)
+from .session_k8s_noob_io import (
+    read_optional_json_file,
+    read_optional_text_file,
+    submit_noob_request_file,
+)
+from .session_k8s_resources import (
+    build_noob_prep_job,
+    build_noob_security_context,
+    build_pod,
+    create_or_reuse_job,
+    create_or_reuse_pod,
+    ensure_pvc,
+    ensure_service,
+    load_kube_batch_v1,
+    load_kube_v1,
+    read_pod_if_exists,
+    wait_for_node_assignment,
+    wait_for_pod_ready,
+    wait_for_pvc_bound,
+    wait_for_service_endpoints,
+)
 
 
 def _get_session_or_raise(session_id: str) -> object:
@@ -542,155 +90,6 @@ def _get_noob_session_or_raise(session_id: str) -> object:
     if session_info is None:
         raise ValueError(f"NOOB session {session_id} not found")
     return session_info
-
-
-def _build_noob_prep_job(
-    *,
-    session_id: str,
-    user_id: str,
-    pvc_name: str,
-    prep_request: NoobWorkspacePrepRequest,
-) -> client.V1Job:
-    job_name = get_noob_prep_job_name(session_id)
-    labels = {
-        "task-id": session_id,
-        "user-id": user_id,
-        "type": "session-worker",
-        "role": "noob-prep",
-    }
-    spec = prep_request.spec
-    env = [
-        client.V1EnvVar(name="NOOB_SESSION_ROOT", value=NOOB_MOUNT_PATH),
-        client.V1EnvVar(name="PREP_REPO_URL", value=spec.repo_url),
-        client.V1EnvVar(name="PREP_REF", value=spec.ref or ""),
-        client.V1EnvVar(name="PREP_DEPTH", value=str(spec.depth or "")),
-        client.V1EnvVar(name="PREP_SUB_PATH", value=spec.sub_path or ""),
-        client.V1EnvVar(name="PREP_MODE", value=spec.mode),
-    ]
-
-    container = client.V1Container(
-        name="noob-prep-container",
-        image=_get_coder_noob_prep_image(),
-        image_pull_policy=_get_image_pull_policy(),
-        env=env,
-        volume_mounts=[
-            client.V1VolumeMount(
-                name="session-data",
-                mount_path=NOOB_MOUNT_PATH,
-                read_only=False,
-            )
-        ],
-    )
-    pod_template = client.V1PodTemplateSpec(
-        metadata=client.V1ObjectMeta(labels=labels),
-        spec=client.V1PodSpec(
-            restart_policy="Never",
-            containers=[container],
-            volumes=[
-                client.V1Volume(
-                    name="session-data",
-                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                        claim_name=pvc_name,
-                        read_only=False,
-                    ),
-                )
-            ],
-        ),
-    )
-    return client.V1Job(
-        metadata=client.V1ObjectMeta(name=job_name, labels=labels),
-        spec=client.V1JobSpec(
-            template=pod_template,
-            backoff_limit=0,
-        ),
-    )
-
-
-def _exec_in_pod(
-    v1: client.CoreV1Api,
-    *,
-    pod_name: str,
-    command: list[str],
-) -> str:
-    return stream(
-        v1.connect_get_namespaced_pod_exec,
-        pod_name,
-        NAMESPACE,
-        command=command,
-        stderr=True,
-        stdin=False,
-        stdout=True,
-        tty=False,
-    )
-
-
-def _read_optional_json_file(
-    v1: client.CoreV1Api,
-    *,
-    pod_name: str,
-    path: str,
-) -> dict:
-    content = _exec_in_pod(
-        v1,
-        pod_name=pod_name,
-        command=["sh", "-lc", f"if [ -f {shlex.quote(path)} ]; then cat {shlex.quote(path)}; fi"],
-    ).strip()
-    if not content:
-        return {}
-    return json.loads(content)
-
-
-def _read_optional_text_file(
-    v1: client.CoreV1Api,
-    *,
-    pod_name: str,
-    path: str,
-) -> str:
-    return _exec_in_pod(
-        v1,
-        pod_name=pod_name,
-        command=["sh", "-lc", f"if [ -f {shlex.quote(path)} ]; then cat {shlex.quote(path)}; fi"],
-    )
-
-
-def _write_text_file_atomic(
-    v1: client.CoreV1Api,
-    *,
-    pod_name: str,
-    path: str,
-    content: str,
-) -> None:
-    parent = os.path.dirname(path)
-    quoted_parent = shlex.quote(parent)
-    quoted_path = shlex.quote(path)
-    quoted_tmp_path = shlex.quote(f"{path}.tmp")
-    quoted_content = shlex.quote(content)
-    command = [
-        "sh",
-        "-lc",
-        (
-            f"mkdir -p {quoted_parent} && "
-            f"tmp={quoted_tmp_path} && "
-            f"printf %s {quoted_content} > \"$tmp\" && "
-            f"mv \"$tmp\" {quoted_path}"
-        ),
-    ]
-    _exec_in_pod(v1, pod_name=pod_name, command=command)
-
-
-def _submit_noob_request_file(v1: client.CoreV1Api, *, pod_name: str, request: NoobTaskRequest) -> None:
-    status = _read_optional_json_file(v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
-    current_status = status.get("status")
-    if current_status == "running":
-        raise RuntimeError("NOOB worker is already running a task")
-
-    request_payload = request.model_dump()
-    _write_text_file_atomic(
-        v1,
-        pod_name=pod_name,
-        path=NOOB_REQUEST_PATH,
-        content=json.dumps(request_payload, ensure_ascii=True, indent=2) + "\n",
-    )
 
 
 def get_pro_realtime_socketio_base_url(session_id: str) -> str:
@@ -724,21 +123,21 @@ async def run_noob_workspace_prep(
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
     batch_v1 = client.BatchV1Api()
-    names = _session_resource_names(session_id)
+    names = session_resource_names(session_id)
     pvc_name = names["noob_pvc_name"]
     pod_name = names["noob_pod_name"]
-    existing_pod = _read_pod_if_exists(v1, pod_name)
+    existing_pod = read_pod_if_exists(v1, pod_name)
     if existing_pod is not None:
         raise RuntimeError(f"NOOB pod {pod_name} already exists; refuse to re-run workspace prep")
-    _ensure_pvc(v1, pvc_name)
-    _wait_for_pvc_bound(v1, pvc_name)
-    job = _build_noob_prep_job(
+    ensure_pvc(v1, pvc_name)
+    wait_for_pvc_bound(v1, pvc_name)
+    job = build_noob_prep_job(
         session_id=session_id,
         user_id=user_id,
         pvc_name=pvc_name,
         prep_request=prep_request,
     )
-    await asyncio.to_thread(_create_or_reuse_job, batch_v1, job)
+    await asyncio.to_thread(create_or_reuse_job, batch_v1, job)
     return _build_prep_status_payload(session_id=session_id, status="running")
 
 
@@ -754,19 +153,19 @@ async def submit_noob_task(
     if workspace_status.status != "ready":
         raise RuntimeError(f"NOOB workspace is not ready for session {session_id}")
     await run_noob_session(session_id=session_id, user_id=user_id, token=token)
-    v1 = _load_kube_v1()
+    v1 = load_kube_v1()
     pod_name = get_noob_pod_name(session_id)
-    _wait_for_pod_ready(v1, pod_name)
-    await asyncio.to_thread(_submit_noob_request_file, v1, pod_name=pod_name, request=request)
+    wait_for_pod_ready(v1, pod_name)
+    await asyncio.to_thread(submit_noob_request_file, v1, pod_name=pod_name, request=request)
     return await get_noob_task_status(session_id)
 
 
 async def get_noob_task_status(session_id: str) -> NoobTaskStatus:
     _get_noob_session_or_raise(session_id)
-    v1 = _load_kube_v1()
+    v1 = load_kube_v1()
     pod_name = get_noob_pod_name(session_id)
-    _wait_for_pod_ready(v1, pod_name)
-    payload = await asyncio.to_thread(_read_optional_json_file, v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
+    wait_for_pod_ready(v1, pod_name)
+    payload = await asyncio.to_thread(read_optional_json_file, v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
     if not payload:
         return NoobTaskStatus(status="unknown")
     return NoobTaskStatus.model_validate(payload)
@@ -774,10 +173,10 @@ async def get_noob_task_status(session_id: str) -> NoobTaskStatus:
 
 async def get_noob_task_result(session_id: str) -> NoobTaskResult:
     _get_noob_session_or_raise(session_id)
-    v1 = _load_kube_v1()
+    v1 = load_kube_v1()
     pod_name = get_noob_pod_name(session_id)
-    _wait_for_pod_ready(v1, pod_name)
-    payload = await asyncio.to_thread(_read_optional_json_file, v1, pod_name=pod_name, path=NOOB_RESULT_PATH)
+    wait_for_pod_ready(v1, pod_name)
+    payload = await asyncio.to_thread(read_optional_json_file, v1, pod_name=pod_name, path=NOOB_RESULT_PATH)
     if not payload:
         return NoobTaskResult()
     return NoobTaskResult.model_validate(payload)
@@ -785,11 +184,11 @@ async def get_noob_task_result(session_id: str) -> NoobTaskResult:
 
 async def get_noob_task_events(session_id: str, tail: int = 200) -> NoobTaskEvents:
     _get_noob_session_or_raise(session_id)
-    v1 = _load_kube_v1()
+    v1 = load_kube_v1()
     pod_name = get_noob_pod_name(session_id)
-    _wait_for_pod_ready(v1, pod_name)
+    wait_for_pod_ready(v1, pod_name)
     content = await asyncio.to_thread(
-        _read_optional_text_file,
+        read_optional_text_file,
         v1,
         pod_name=pod_name,
         path=NOOB_EVENTS_PATH,
@@ -803,7 +202,7 @@ async def get_noob_task_events(session_id: str, tail: int = 200) -> NoobTaskEven
 
 async def get_noob_workspace_status(session_id: str) -> NoobWorkspacePrepStatus:
     _get_noob_session_or_raise(session_id)
-    batch_v1 = _load_kube_batch_v1()
+    batch_v1 = load_kube_batch_v1()
     job_name = get_noob_prep_job_name(session_id)
     try:
         job = batch_v1.read_namespaced_job(name=job_name, namespace=NAMESPACE)
@@ -911,14 +310,14 @@ async def start_tunnel(session_id: str, tunnel_name: str, token: str) -> TunnelI
     print(f"[start_tunnel] loading kubeconfig from {REMOTE_CONFIG_PATH}")
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = _session_resource_names(session_id)
+    names = session_resource_names(session_id)
     pod_name = names["pro_pod_name"]
     print(
         f"[start_tunnel] starting tunnel request: session_id={session_id} pod_name={pod_name} "
         f"tunnel_name={tunnel_name}"
     )
     print(f"[start_tunnel] waiting for pod readiness: pod={pod_name}")
-    _wait_for_pod_ready(v1, pod_name)
+    wait_for_pod_ready(v1, pod_name)
     await asyncio.sleep(2)
     print(f"[start_tunnel] pod is ready: pod={pod_name}")
     status_code, payload = await asyncio.to_thread(
@@ -945,26 +344,26 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = _session_resource_names(session_id)
+    names = session_resource_names(session_id)
     pro_pvc_name = names["pro_pvc_name"]
     pro_pod_name = names["pro_pod_name"]
     pro_service_name = names["pro_service_name"]
 
-    _ensure_pvc(v1, pro_pvc_name)
+    ensure_pvc(v1, pro_pvc_name)
 
-    pro_pod_spec = _build_pod(
+    pro_pod_spec = build_pod(
         pod_name=pro_pod_name,
         session_id=session_id,
         user_id=user_id,
         role="pro",
         token=token,
-        image=_get_coder_pro_image(),
+        image=get_coder_pro_image(),
         own_pvc_name=pro_pvc_name,
     )
-    _create_or_reuse_pod(v1, pro_pod_spec)
-    _wait_for_node_assignment(v1, pro_pod_name)
-    _wait_for_pvc_bound(v1, pro_pvc_name)
-    _ensure_service(
+    create_or_reuse_pod(v1, pro_pod_spec)
+    wait_for_node_assignment(v1, pro_pod_name)
+    wait_for_pvc_bound(v1, pro_pvc_name)
+    ensure_service(
         v1,
         service_name=pro_service_name,
         selector={
@@ -973,8 +372,8 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
             "role": "pro",
         },
     )
-    _wait_for_pod_ready(v1, pro_pod_name)
-    _wait_for_service_endpoints(v1, pro_service_name)
+    wait_for_pod_ready(v1, pro_pod_name)
+    wait_for_service_endpoints(v1, pro_service_name)
 
     return SessionInfo(id=session_id)
 
@@ -984,29 +383,29 @@ async def run_noob_session(session_id: str, *, user_id: str, token: str) -> Sess
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = _session_resource_names(session_id)
+    names = session_resource_names(session_id)
     noob_pvc_name = names["noob_pvc_name"]
     noob_pod_name = names["noob_pod_name"]
 
-    _ensure_pvc(v1, noob_pvc_name)
-    _wait_for_pvc_bound(v1, noob_pvc_name)
+    ensure_pvc(v1, noob_pvc_name)
+    wait_for_pvc_bound(v1, noob_pvc_name)
 
-    noob_pod_spec = _build_pod(
+    noob_pod_spec = build_pod(
         pod_name=noob_pod_name,
         session_id=session_id,
         user_id=user_id,
         role="noob",
         token=token,
-        image=_get_coder_noob_image(),
+        image=get_coder_noob_image(),
         own_pvc_name=noob_pvc_name,
         own_mount_path=NOOB_MOUNT_PATH,
         runtime_class_name=NOOB_RUNTIME_CLASS_NAME or None,
-        security_context=_build_noob_security_context(),
+        security_context=build_noob_security_context(),
         extra_env=[
             client.V1EnvVar(name="NOOB_SESSION_ROOT", value=NOOB_MOUNT_PATH),
         ],
     )
-    _create_or_reuse_pod(v1, noob_pod_spec)
-    _wait_for_node_assignment(v1, noob_pod_name)
-    _wait_for_pod_ready(v1, noob_pod_name)
+    create_or_reuse_pod(v1, noob_pod_spec)
+    wait_for_node_assignment(v1, noob_pod_name)
+    wait_for_pod_ready(v1, noob_pod_name)
     return SessionInfo(id=session_id)

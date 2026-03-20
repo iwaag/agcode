@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from agpyutils.auth import auth_info_from_bearer_token, issue_own_client_access_token
+from agpyutils.auth import auth_info_from_bearer_token
 from agpyutils.task import get_task_hub, models as task_models
+from pydantic import BaseModel
 
 VSCODE_CLI_BIN = os.getenv("VSCODE_CLI_BIN", "code")
 
@@ -22,19 +23,17 @@ _DEVICE_LOGIN_PATTERN = re.compile(
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", None)
 
 task_hub = get_task_hub()
+
+
 @dataclass(frozen=True)
 class DeviceLoginPrompt:
     url: str
     code: str
 
 
-@dataclass(frozen=True)
-class TunnelStartResult:
+class TunnelStartResult(BaseModel):
     status: Literal["ok", "already_running", "manual_auth_required"]
-    pid: int
-    tunnel_name: str | None = None
-    redirect_url: str | None = None
-    code: str | None = None
+    tunnel_name: str
 
 
 def _extract_device_login(log_content: str) -> DeviceLoginPrompt | None:
@@ -70,29 +69,31 @@ def _get_running_pid() -> int | None:
     return pid
 
 
-def _result_for_existing_process(pid: int, log_content: str, tunnel_name: str) -> TunnelStartResult:
+def _check_log_for_result(
+    log_content: str,
+    tunnel_name: str,
+    success_status: Literal["ok", "already_running"],
+) -> TunnelStartResult | None:
+    if "Open this link in your browser" in log_content or "https://vscode.dev/tunnel/" in log_content:
+        return TunnelStartResult(status=success_status, tunnel_name=tunnel_name)
     prompt = _extract_device_login(log_content)
     if prompt is not None:
-        return TunnelStartResult(
-            status="manual_auth_required",
-            pid=pid,
-            tunnel_name=tunnel_name,
-            redirect_url=prompt.url,
-            code=prompt.code,
-        )
-
-    return TunnelStartResult(status="already_running", pid=pid, tunnel_name=tunnel_name)
+        return TunnelStartResult(status="manual_auth_required", tunnel_name=tunnel_name)
+    return None
 
 
 async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResult:
     running_pid = _get_running_pid()
     if running_pid is not None:
-        return _result_for_existing_process(running_pid, _read_log_content(), tunnel_name)
+        result = _check_log_for_result(_read_log_content(), tunnel_name, "already_running")
+        if result is not None:
+            return result
+        return TunnelStartResult(status="already_running", tunnel_name=tunnel_name)
 
     LOG_FILE.write_text("", encoding="utf-8")
     log_fd = open(LOG_FILE, "w", encoding="utf-8")
-    env = os.environ.copy()
-    env["VSCODE_CLI_ACCESS_TOKEN"] = host_token
+    #env = os.environ.copy()
+    #env["VSCODE_CLI_ACCESS_TOKEN"] = host_token
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -102,8 +103,7 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
             tunnel_name,
             "--accept-server-license-terms",
             stdout=log_fd,
-            stderr=log_fd,
-            env=env,
+            stderr=log_fd
         )
     except FileNotFoundError as exc:
         raise RuntimeError(f"'{VSCODE_CLI_BIN}' command was not found") from exc
@@ -117,24 +117,19 @@ async def start_tunnel(*, tunnel_name: str, host_token: str) -> TunnelStartResul
         except asyncio.TimeoutError:
             pass
         log_content = _read_log_content()
-        if "Open this link in your browser" in log_content or "https://vscode.dev/tunnel/" in log_content:
-            return TunnelStartResult(status="ok", pid=proc.pid, tunnel_name=tunnel_name)
-        prompt = _extract_device_login(log_content)
-        if prompt is not None:
-            hints = {"code": prompt.code}
-            task_hub.request_labor_auth(
-                task=task_models.Task_UnmanagedLabor(
-                    meta=task_models.TaskMetadata(type_id="code_auth", user_id=my_auth_info.user_id, project_id=""),
-                    redirect_url=prompt.url, wait_for=timedelta(minutes=5), hints=hints
+        result = _check_log_for_result(log_content, tunnel_name, "ok")
+        if result is not None:
+            if result.status == "manual_auth_required":
+                prompt = _extract_device_login(log_content)
+                if prompt is None:
+                    raise RuntimeError("manual auth required without prompt details")
+                task_hub.request_labor_auth(
+                    task=task_models.Task_UnmanagedLabor(
+                        meta=task_models.TaskMetadata(type_id="code_auth", user_id=my_auth_info.user_id, project_id=""),
+                        redirect_url=prompt.url, wait_for=timedelta(minutes=5), hints={"code": prompt.code}
+                    )
                 )
-            )
-            return TunnelStartResult(
-                status="manual_auth_required",
-                pid=proc.pid,
-                tunnel_name=tunnel_name,
-                redirect_url=prompt.url,
-                code=prompt.code,
-            )
+            return result
 
         if proc.returncode is not None:
             PID_FILE.unlink(missing_ok=True)
