@@ -12,11 +12,12 @@ from agcode_domain.errors import (
     SessionNotFoundError,
 )
 from agcode_domain.schema import MissionCreateRequest, MissionInfo, MissionListInfo
+from agcode_domain.session_mapping import SessionModel
 
 
 class MissionRecord(Protocol):
     id: str
-    mission_name: str
+    title: str
     repo_url: str
     instruction: str
     session_id: str | None
@@ -25,12 +26,6 @@ class MissionRecord(Protocol):
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
-
-
-class SessionRecord(Protocol):
-    id: str
-    user_id: str
-    project_id: str
 
 
 class MissionRepository(Protocol):
@@ -45,7 +40,7 @@ class MissionRepository(Protocol):
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
     ) -> MissionRecord: ...
-    def get_session(self, session_id: str) -> SessionRecord | None: ...
+    def get_session(self, session_id: str) -> SessionModel | None: ...
 
 
 class MissionRuntime(Protocol):
@@ -55,7 +50,7 @@ class MissionRuntime(Protocol):
 def _to_mission_info(model: MissionRecord) -> MissionInfo:
     return MissionInfo(
         id=model.id,
-        mission_name=model.mission_name,
+        title=model.title,
         repo_url=model.repo_url,
         instruction=model.instruction,
         session_id=model.session_id,
@@ -76,7 +71,7 @@ def _get_owned_mission(repository: MissionRepository, *, mission_id: str, user_i
     return mission
 
 
-def _get_owned_session(repository: MissionRepository, *, session_id: str, user_id: str) -> SessionRecord:
+def _get_owned_session(repository: MissionRepository, *, session_id: str, user_id: str) -> SessionModel:
     session = repository.get_session(session_id)
     if session is None:
         raise SessionNotFoundError(f"Session {session_id} not found")
@@ -114,9 +109,10 @@ async def start_mission(
     user_id: str,
 ) -> MissionInfo:
     mission = _get_owned_mission(repository, mission_id=mission_id, user_id=user_id)
-    session = _get_owned_session(repository, session_id=session_id, user_id=user_id)
-    if mission.project_id != session.project_id:
-        raise MissionConflictError("Mission project_id does not match session project_id")
+    if session_id:
+        session = _get_owned_session(repository, session_id=session_id, user_id=user_id)
+        if mission.project_id != session.project_id:
+            raise MissionConflictError("Mission project_id does not match session project_id")
     if mission.started_at is not None or mission.session_id is not None:
         raise MissionConflictError(f"Mission {mission_id} is already started")
     await runtime.start_mission(session_id=session_id, mission=mission)

@@ -9,21 +9,14 @@ from typing import Protocol
 
 from agcode_domain.errors import SessionAccessDeniedError, SessionNotFoundError
 from agcode_domain.schema import SessionConfig, SessionInfo, SessionListInfo, SessionUpdate, TunnelInfo
-from agcode_domain.session_mapping import session_model_sequence_to_sceme, session_model_to_scheme
-
-
-class SessionRecord(Protocol):
-    id: str
-    user_id: str
-    project_id: str
-    config: dict
+from agcode_domain.session_mapping import SessionModel, session_model_to_info, session_models_to_list_info
 
 
 class SessionRepository(Protocol):
-    def new_session(self, user_id: str, session_config: SessionConfig) -> SessionRecord: ...
-    def update_session(self, session_id: str, updates: SessionUpdate) -> SessionRecord: ...
-    def get_session(self, session_id: str) -> SessionRecord | None: ...
-    def list_sessions(self, user_id: str, project_id: str) -> Sequence[SessionRecord]: ...
+    def new_session(self, user_id: str, session_config: SessionConfig) -> SessionModel: ...
+    def update_session(self, session_id: str, updates: SessionUpdate) -> SessionModel: ...
+    def get_session(self, session_id: str) -> SessionModel | None: ...
+    def list_sessions(self, user_id: str, project_id: str) -> Sequence[SessionModel]: ...
 
 
 class SessionRuntime(Protocol):
@@ -43,7 +36,7 @@ def get_owned_session(
     *,
     session_id: str,
     user_id: str,
-) -> SessionRecord:
+) -> SessionModel:
     session = repository.get_session(session_id)
     if session is None:
         raise SessionNotFoundError(f"Session {session_id} not found")
@@ -58,7 +51,7 @@ def create_session(
     user_id: str,
     session_config: SessionConfig,
 ) -> SessionInfo:
-    return session_model_to_scheme(repository.new_session(user_id=user_id, session_config=session_config))
+    return session_model_to_info(repository.new_session(user_id=user_id, session_config=session_config))
 
 
 async def open_session(
@@ -80,7 +73,7 @@ async def open_session(
         session.id,
         SessionUpdate(task_started_at=datetime.now()),
     )
-    return session_model_to_scheme(updated)
+    return session_model_to_info(updated)
 
 
 def build_tunnel_name(*, user_id: str) -> str:
@@ -118,7 +111,7 @@ def list_sessions(
     user_id: str,
     project_id: str,
 ) -> SessionListInfo:
-    return session_model_sequence_to_sceme(repository.list_sessions(user_id, project_id))
+    return session_models_to_list_info(repository.list_sessions(user_id, project_id))
 
 
 async def apply_session_update(
@@ -129,7 +122,7 @@ async def apply_session_update(
     updates: SessionUpdate,
 ) -> SessionInfo:
     updated = repository.update_session(session_id, updates)
-    session_info = session_model_to_scheme(updated)
+    session_info = session_model_to_info(updated)
     await event_bus.publish(
         event_bus.session_channel(session_id),
         session_info.model_dump_json(),

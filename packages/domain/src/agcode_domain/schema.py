@@ -27,7 +27,7 @@ class SessionInfo(SessionUpdate):
     id: str
 
 class SessionListInfo(BaseModel):
-    sessions: Sequence[SessionInfo]
+    sessions: List[SessionInfo]
 
 
 class TunnelInfo(BaseModel):
@@ -35,20 +35,20 @@ class TunnelInfo(BaseModel):
 
 
 class MissionCreateRequest(BaseModel):
-    mission_name: str = Field(min_length=1)
+    title: str = Field(min_length=1)
     repo_url: str = Field(min_length=1)
     instruction: str = Field(min_length=1)
     project_id: str = Field(min_length=1)
 
 
 class MissionStartRequest(BaseModel):
-    session_id: str = Field(min_length=1)
+    session_id: Optional[str] = None
     mission_id: str = Field(min_length=1)
 
 
 class MissionInfo(BaseModel):
     id: str
-    mission_name: str
+    title: str
     repo_url: str
     instruction: str
     session_id: Optional[str] = None

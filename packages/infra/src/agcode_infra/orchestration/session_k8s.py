@@ -10,6 +10,7 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from kubernetes.stream import portforward
 
+from agcode_domain.mission_service import MissionRecord
 from agcode_domain.schema import (
     NoobTaskEvents,
     NoobTaskRequest,
@@ -99,7 +100,7 @@ def _get_noob_session_or_raise(session_id: str) -> object:
     return session_info
 
 
-def _mission_workspace_name(repo_url: str, mission_name: str) -> str:
+def _mission_workspace_name(repo_url: str, title: str) -> str:
     path = urlsplit(repo_url).path.rstrip("/")
     candidate = path.rsplit("/", 1)[-1] if path else ""
     if candidate.endswith(".git"):
@@ -107,7 +108,7 @@ def _mission_workspace_name(repo_url: str, mission_name: str) -> str:
     candidate = re.sub(r"[^A-Za-z0-9._-]+", "-", candidate).strip(".-")
     if candidate:
         return candidate
-    fallback = re.sub(r"[^A-Za-z0-9._-]+", "-", mission_name).strip(".-")
+    fallback = re.sub(r"[^A-Za-z0-9._-]+", "-", title).strip(".-")
     return fallback or "workspace"
 
 
@@ -432,27 +433,30 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
 
     return SessionInfo(id=session_id)
 
+def auto_choose_session(mission: MissionRecord) -> SessionInfo:
+    #lazy stub
+    session_list = db.list_sessions(user_id=mission.user_id, project_id=mission.project_id)
+    return SessionInfo(id=session_list[0].id)
 
-async def start_mission(*, session_id: str, mission: object) -> None:
-    _get_session_or_raise(session_id)
+async def start_mission(*, session_id: str, mission: MissionRecord) -> None:
+    session: SessionInfo | None = None
+    if not session_id:
+        session = auto_choose_session(mission)
+    else:
+        session = _get_session_or_raise(session_id)
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    pod_name = session_resource_names(session_id)["pro_pod_name"]
+    pod_name = session_resource_names(session.id)["pro_pod_name"]
     wait_for_pod_ready(v1, pod_name)
 
-    mission_id = getattr(mission, "id")
-    mission_name = getattr(mission, "mission_name")
-    repo_url = getattr(mission, "repo_url")
-    instruction = getattr(mission, "instruction")
-
     mission_root = posixpath.join(PRO_MOUNT_PATH, "missions")
-    mission_dir = posixpath.join(mission_root, mission_id)
-    workspace_dir = posixpath.join(mission_dir, _mission_workspace_name(repo_url, mission_name))
+    mission_dir = posixpath.join(mission_root, mission.id)
+    workspace_dir = posixpath.join(mission_dir, _mission_workspace_name(mission.repo_url, mission.title))
     quoted_mission_root = shlex.quote(mission_root)
     quoted_mission_dir = shlex.quote(mission_dir)
     quoted_workspace_dir = shlex.quote(workspace_dir)
-    quoted_repo_url = shlex.quote(repo_url)
+    quoted_repo_url = shlex.quote(mission.repo_url)
 
     _run_checked_shell_in_pod(
         v1,
@@ -477,7 +481,7 @@ async def start_mission(*, session_id: str, mission: object) -> None:
         v1,
         pod_name=pod_name,
         path=posixpath.join(mission_dir, "AGENT.md"),
-        content=_build_agent_md(instruction),
+        content=_build_agent_md(mission.instruction),
     )
 
 

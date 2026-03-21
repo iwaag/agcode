@@ -8,7 +8,6 @@ from agcode_domain.schema import (
     NoobSessionUpdate,
     NoobThreadCreateRequest,
     SessionConfig,
-    SessionListInfo,
     SessionUpdate,
 )
 from agcode_infra.config import get_database_settings
@@ -158,7 +157,7 @@ def update_noob_thread_status(thread_id: str, status: str) -> NoobThread:
 
 def new_mission(user_id: str, request: MissionCreateRequest) -> Mission:
     mission = Mission(
-        mission_name=request.mission_name,
+        title=request.title,
         repo_url=request.repo_url,
         instruction=request.instruction,
         user_id=user_id,
@@ -210,8 +209,7 @@ def update_mission(
         session.refresh(mission)
         return mission
 
-
-def list_sessions(user_id: str, project_id: str) -> SessionListInfo:
+def list_sessions(user_id: str, project_id: str) -> list[TaskSession]:
     with Session(get_engine()) as session:
         stmt = select(TaskSession).where(TaskSession.user_id == user_id, TaskSession.project_id == project_id)
-        return session.exec(stmt).all()
+        return list(session.exec(stmt).all())
