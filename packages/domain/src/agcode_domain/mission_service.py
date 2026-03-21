@@ -89,6 +89,15 @@ def create_mission(
     return _to_mission_info(repository.new_mission(user_id=user_id, request=request))
 
 
+def get_mission(
+    repository: MissionRepository,
+    *,
+    mission_id: str,
+    user_id: str,
+) -> MissionInfo:
+    return _to_mission_info(_get_owned_mission(repository, mission_id=mission_id, user_id=user_id))
+
+
 def list_missions(
     repository: MissionRepository,
     *,
