@@ -63,6 +63,18 @@ async def get_mission(mission_id: str, auth: AuthInfo = Depends(get_auth_info)) 
         _raise_http_mission_error(exc)
 
 
+@router.post("/complete", summary="Complete mission")
+async def complete_mission(mission_id: str, auth: AuthInfo = Depends(get_auth_info)) -> MissionInfo:
+    try:
+        return mission_service.complete_mission(
+            db,
+            mission_id=mission_id,
+            user_id=auth.user_id,
+        )
+    except (MissionNotFoundError, MissionAccessDeniedError, MissionConflictError) as exc:
+        _raise_http_mission_error(exc)
+
+
 @router.get("/list", summary="List missions")
 async def list_missions(project_id: str, auth: AuthInfo = Depends(get_auth_info)) -> MissionListInfo:
     return mission_service.list_missions(

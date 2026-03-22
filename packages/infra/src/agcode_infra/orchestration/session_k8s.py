@@ -116,13 +116,20 @@ def _build_agent_md(mission : MissionRecord) -> str:
     base = (
         f"mission_id = {mission.id}\n"
         "\n"
-        "Execute the command below at the beginning in the user's shell and understand the mission.\n"
+        "Run the command below to understand the mission.\n"
         f"agdev code mission {mission.id}\n"
         "\n"
-        "Follow the mission information unless the user explicitly told you otherwise.\n"
-        "If you are given contradicting information and instruction, ask user for clarification before starting to work.\n"
+        "Start working on the mission unless the user says otherwise.\n"
+        "If you encounter an error, ask the user for direction.\n"
         "\n"
-        "First, create branch"
+        "Ask the user for confirmation at each step below.\n"
+        "1. Find a git repository in the workspace and write your plan to <repository root>/.mission/plan.md.\n"
+        "2. Commit with message '[ai]plan' and execute the plan.\n"
+        "3. If successful, commit with message '[ai]execute' and write a detailed report to <repository root>/.mission/report.md.\n"
+        "   If failed, report to the user and ask for direction.\n"
+        "4. Commit with message '[ai]report', remove <repository root>/.mission, commit the deletion with '[ai]cleanup', and merge to master by squash strategy.\n"
+        ""
+
     )
     return base
 
