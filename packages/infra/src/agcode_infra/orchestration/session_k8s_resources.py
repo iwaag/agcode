@@ -132,12 +132,27 @@ def build_pod(
         "type": "session-worker",
         "role": role,
     }
+    seed_mount_path = "/seed"
+    seed_marker_dir = f"{seed_mount_path}/.agcode-seeded"
     volume_mounts = [
         client.V1VolumeMount(
             name="own-task-data",
             mount_path=own_mount_path,
             read_only=False,
+            sub_path="data"
         ),
+        client.V1VolumeMount(
+            name="own-task-data",
+            mount_path="/root",
+            read_only=False,
+            sub_path="root"
+        ),
+        client.V1VolumeMount(
+            name="own-task-data",
+            mount_path="/home",
+            read_only=False,
+            sub_path="home"
+        )
     ]
     volumes = [
         client.V1Volume(
@@ -148,6 +163,34 @@ def build_pod(
             ),
         ),
     ]
+    init_container = client.V1Container(
+        name="seed-home-root",
+        image=image,
+        image_pull_policy=get_image_pull_policy(),
+        command=[
+            "sh",
+            "-lc",
+            (
+                f"set -eu; "
+                f"mkdir -p {seed_marker_dir} {seed_mount_path}/root {seed_mount_path}/home; "
+                f"if [ ! -f {seed_marker_dir}/root ]; then "
+                f"if [ -d /root ]; then cp -a /root/. {seed_mount_path}/root/; fi; "
+                f": > {seed_marker_dir}/root; "
+                f"fi; "
+                f"if [ ! -f {seed_marker_dir}/home ]; then "
+                f"if [ -d /home ]; then cp -a /home/. {seed_mount_path}/home/; fi; "
+                f": > {seed_marker_dir}/home; "
+                f"fi"
+            ),
+        ],
+        volume_mounts=[
+            client.V1VolumeMount(
+                name="own-task-data",
+                mount_path=seed_mount_path,
+                read_only=False,
+            )
+        ],
+    )
     if peer_pvc_name is not None:
         volume_mounts.append(
             client.V1VolumeMount(
@@ -203,6 +246,7 @@ def build_pod(
         spec=client.V1PodSpec(
             restart_policy="Never",
             node_name=node_name,
+            init_containers=[init_container],
             containers=[container],
             volumes=volumes,
             runtime_class_name=runtime_class_name,
@@ -225,20 +269,46 @@ def _container_env_map(container: client.V1Container | None) -> dict[str, str | 
     return {env.name: env.value for env in container.env}
 
 
+def _container_mount_map(container: client.V1Container | None) -> list[tuple[str | None, str | None, str | None, bool | None]]:
+    if container is None or not container.volume_mounts:
+        return []
+    return [
+        (mount.name, mount.mount_path, mount.sub_path, mount.read_only)
+        for mount in container.volume_mounts
+    ]
+
+
+def _container_command(container: client.V1Container | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if container is None:
+        return (), ()
+    return tuple(container.command or []), tuple(container.args or [])
+
+
 def _pod_matches_spec(existing_pod: client.V1Pod, desired_pod: client.V1Pod) -> bool:
     if existing_pod.spec.runtime_class_name != desired_pod.spec.runtime_class_name:
+        return False
+    existing_init_containers = existing_pod.spec.init_containers or []
+    desired_init_containers = desired_pod.spec.init_containers or []
+    if len(existing_init_containers) != len(desired_init_containers):
         return False
     existing_containers = existing_pod.spec.containers or []
     desired_containers = desired_pod.spec.containers or []
     if len(existing_containers) != len(desired_containers):
         return False
 
-    for existing_container, desired_container in zip(existing_containers, desired_containers):
+    all_existing_containers = [*existing_init_containers, *existing_containers]
+    all_desired_containers = [*desired_init_containers, *desired_containers]
+
+    for existing_container, desired_container in zip(all_existing_containers, all_desired_containers):
         if existing_container.name != desired_container.name:
             return False
         if existing_container.image != desired_container.image:
             return False
         if existing_container.image_pull_policy != desired_container.image_pull_policy:
+            return False
+        if _container_command(existing_container) != _container_command(desired_container):
+            return False
+        if _container_mount_map(existing_container) != _container_mount_map(desired_container):
             return False
         # Temporarily ignore env drift for pod reuse.
         # Request-scoped values like AUTH_TOKEN change across API calls and were
