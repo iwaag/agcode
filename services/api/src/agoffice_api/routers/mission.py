@@ -6,20 +6,20 @@ from agoffice_domain.errors import (
     MissionAccessDeniedError,
     MissionConflictError,
     MissionNotFoundError,
-    SessionAccessDeniedError,
-    SessionNotFoundError,
+    RoomAccessDeniedError,
+    RoomNotFoundError,
 )
 from agoffice_domain.schema import MissionCreateRequest, MissionInfo, MissionListInfo, MissionStartRequest
 from agoffice_infra.db import mission as mission_db
-from agoffice_infra.orchestration import session_k8s as task_session
+from agoffice_infra.orchestration import room_k8s as task_room
 
 router = APIRouter()
 
 
 def _raise_http_mission_error(exc: Exception) -> None:
-    if isinstance(exc, (MissionNotFoundError, SessionNotFoundError)):
+    if isinstance(exc, (MissionNotFoundError, RoomNotFoundError)):
         raise HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, (MissionAccessDeniedError, SessionAccessDeniedError)):
+    if isinstance(exc, (MissionAccessDeniedError, RoomAccessDeniedError)):
         raise HTTPException(status_code=403, detail=str(exc))
     if isinstance(exc, MissionConflictError):
         raise HTTPException(status_code=409, detail=str(exc))
@@ -35,17 +35,17 @@ async def create_mission(request: MissionCreateRequest, auth: AuthInfo = Depends
     )
 
 
-@router.post("/start", summary="Start mission in a PRO session")
+@router.post("/start", summary="Start mission in a PRO room")
 async def start_mission(request: MissionStartRequest, auth: AuthInfo = Depends(get_auth_info)) -> MissionInfo:
     try:
         return await mission_service.start_mission(
             mission_db,
-            task_session,
+            task_room,
             mission_id=request.mission_id,
-            session_id=request.session_id,
+            room_id=request.room_id,
             user_id=auth.user_id,
         )
-    except (MissionNotFoundError, MissionAccessDeniedError, MissionConflictError, SessionNotFoundError, SessionAccessDeniedError) as exc:
+    except (MissionNotFoundError, MissionAccessDeniedError, MissionConflictError, RoomNotFoundError, RoomAccessDeniedError) as exc:
         _raise_http_mission_error(exc)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

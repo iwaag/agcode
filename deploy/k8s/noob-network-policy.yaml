@@ -5,7 +5,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      type: session-worker
+      type: room-worker
       role: noob
   policyTypes:
     - Egress

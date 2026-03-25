@@ -3,20 +3,20 @@ from sqlalchemy import Engine
 from sqlmodel import SQLModel, Session, create_engine, select
 
 from agoffice_domain.schema import (
-    NoobSessionCreateRequest,
-    NoobSessionUpdate,
+    NoobRoomCreateRequest,
+    NoobRoomUpdate,
     NoobThreadCreateRequest,
-    SessionConfig,
-    SessionUpdate,
+    RoomConfig,
+    RoomUpdate,
 )
 from agoffice_infra.config import get_database_settings
 from agoffice_infra.db.models import (
     Agent,
     Instruction,
-    NoobSession,
+    NoobRoom,
     NoobThread,
-    Session as TaskSession,
-    generate_session_id,
+    Room as TaskRoom,
+    generate_room_id,
 )
 
 _engine: Engine | None = None
@@ -33,109 +33,109 @@ def init_database() -> None:
     SQLModel.metadata.create_all(get_engine())
 
 
-def _allocate_session_index(session: Session, *, user_id: str, project_id: str) -> int:
-    stmt = select(TaskSession.session_index).where(
-        TaskSession.user_id == user_id,
-        TaskSession.project_id == project_id,
+def _allocate_room_index(session: Session, *, user_id: str, project_id: str) -> int:
+    stmt = select(TaskRoom.room_index).where(
+        TaskRoom.user_id == user_id,
+        TaskRoom.project_id == project_id,
     )
     used_indexes = set(session.exec(stmt).all())
-    for session_index in range(101):
-        if session_index not in used_indexes:
-            return session_index
-    raise ValueError(f"No available session index for user_id={user_id} project_id={project_id}")
+    for room_index in range(101):
+        if room_index not in used_indexes:
+            return room_index
+    raise ValueError(f"No available room index for user_id={user_id} project_id={project_id}")
 
 
 
-def new_session(user_id: str, session_config: SessionConfig) -> TaskSession:
+def new_room(user_id: str, room_config: RoomConfig) -> TaskRoom:
     with Session(get_engine()) as session:
-        session_index = _allocate_session_index(session, user_id=user_id, project_id=session_config.project_id)
-        new_session = TaskSession(
-            id=generate_session_id(
+        room_index = _allocate_room_index(session, user_id=user_id, project_id=room_config.project_id)
+        new_room = TaskRoom(
+            id=generate_room_id(
                 user_id=user_id,
-                project_id=session_config.project_id,
-                session_index=session_index,
+                project_id=room_config.project_id,
+                room_index=room_index,
             ),
-            title=session_config.title,
+            title=room_config.title,
             user_id=user_id,
-            project_id=session_config.project_id,
-            session_index=session_index,
-            instruction=session_config.instruction,
-            config=session_config.model_dump(),
+            project_id=room_config.project_id,
+            room_index=room_index,
+            instruction=room_config.instruction,
+            config=room_config.model_dump(),
             created_at=datetime.now(),
         )
-        session.add(new_session)
+        session.add(new_room)
         session.flush()
         session.commit()
-        session.refresh(new_session)
-        return new_session
+        session.refresh(new_room)
+        return new_room
 
-def update_session(session_id: str, updates: SessionUpdate) -> TaskSession:
+def update_room(room_id: str, updates: RoomUpdate) -> TaskRoom:
     with Session(get_engine()) as session:
-        db_session = session.get(TaskSession, session_id)
-        if not db_session:
-            raise ValueError(f"Session {session_id} not found")
+        db_room = session.get(TaskRoom, room_id)
+        if not db_room:
+            raise ValueError(f"Room {room_id} not found")
         update_data = updates.model_dump(exclude_unset=True)
-        db_session.sqlmodel_update(update_data)
-        db_session.updated_at = datetime.now()
-        session.add(db_session)
+        db_room.sqlmodel_update(update_data)
+        db_room.updated_at = datetime.now()
+        session.add(db_room)
         session.commit()
-        session.refresh(db_session)
-        return db_session
+        session.refresh(db_room)
+        return db_room
 
-def get_session(session_id: str) -> TaskSession:
+def get_room(room_id: str) -> TaskRoom:
     with Session(get_engine()) as session:
-        return session.get(TaskSession, session_id)
+        return session.get(TaskRoom, room_id)
 
 
-def get_noob_session(session_id: str) -> NoobSession | None:
+def get_noob_room(room_id: str) -> NoobRoom | None:
     with Session(get_engine()) as session:
-        return session.get(NoobSession, session_id)
+        return session.get(NoobRoom, room_id)
 
 
-def get_active_noob_session_for_user(user_id: str) -> NoobSession | None:
+def get_active_noob_room_for_user(user_id: str) -> NoobRoom | None:
     with Session(get_engine()) as session:
         stmt = (
-            select(NoobSession)
-            .where(NoobSession.user_id == user_id, NoobSession.finished_at.is_(None))
-            .order_by(NoobSession.created_at.desc())
+            select(NoobRoom)
+            .where(NoobRoom.user_id == user_id, NoobRoom.finished_at.is_(None))
+            .order_by(NoobRoom.created_at.desc())
         )
         return session.exec(stmt).first()
 
 
-def new_noob_session(user_id: str, session_config: NoobSessionCreateRequest) -> NoobSession:
-    new_session = NoobSession(
-        title=session_config.title,
+def new_noob_room(user_id: str, room_config: NoobRoomCreateRequest) -> NoobRoom:
+    new_room = NoobRoom(
+        title=room_config.title,
         user_id=user_id,
-        project_id=session_config.project_id,
-        initial_instruction=session_config.initial_instruction,
-        config=session_config.model_dump(),
+        project_id=room_config.project_id,
+        initial_instruction=room_config.initial_instruction,
+        config=room_config.model_dump(),
         created_at=datetime.now(),
     )
     with Session(get_engine()) as session:
-        session.add(new_session)
+        session.add(new_room)
         session.flush()
         session.commit()
-        session.refresh(new_session)
-        return new_session
+        session.refresh(new_room)
+        return new_room
 
 
-def update_noob_session(session_id: str, updates: NoobSessionUpdate) -> NoobSession:
+def update_noob_room(room_id: str, updates: NoobRoomUpdate) -> NoobRoom:
     with Session(get_engine()) as session:
-        db_session = session.get(NoobSession, session_id)
-        if not db_session:
-            raise ValueError(f"NOOB session {session_id} not found")
+        db_room = session.get(NoobRoom, room_id)
+        if not db_room:
+            raise ValueError(f"NOOB room {room_id} not found")
         update_data = updates.model_dump(exclude_unset=True)
-        db_session.sqlmodel_update(update_data)
-        db_session.updated_at = datetime.now()
-        session.add(db_session)
+        db_room.sqlmodel_update(update_data)
+        db_room.updated_at = datetime.now()
+        session.add(db_room)
         session.commit()
-        session.refresh(db_session)
-        return db_session
+        session.refresh(db_room)
+        return db_room
 
 
-def create_noob_thread(noob_session_id: str, thread: NoobThreadCreateRequest) -> NoobThread:
+def create_noob_thread(noob_room_id: str, thread: NoobThreadCreateRequest) -> NoobThread:
     new_thread = NoobThread(
-        noob_session_id=noob_session_id,
+        noob_room_id=noob_room_id,
         title=thread.title,
         keep_context=thread.keep_context,
         status="idle",
@@ -149,11 +149,11 @@ def create_noob_thread(noob_session_id: str, thread: NoobThreadCreateRequest) ->
         return new_thread
 
 
-def list_noob_threads(noob_session_id: str) -> list[NoobThread]:
+def list_noob_threads(noob_room_id: str) -> list[NoobThread]:
     with Session(get_engine()) as session:
         stmt = (
             select(NoobThread)
-            .where(NoobThread.noob_session_id == noob_session_id)
+            .where(NoobThread.noob_room_id == noob_room_id)
             .order_by(NoobThread.created_at.asc())
         )
         return list(session.exec(stmt).all())
@@ -164,11 +164,11 @@ def get_noob_thread(thread_id: str) -> NoobThread | None:
         return session.get(NoobThread, thread_id)
 
 
-def get_active_noob_thread(noob_session_id: str) -> NoobThread | None:
+def get_active_noob_thread(noob_room_id: str) -> NoobThread | None:
     with Session(get_engine()) as session:
         stmt = (
             select(NoobThread)
-            .where(NoobThread.noob_session_id == noob_session_id)
+            .where(NoobThread.noob_room_id == noob_room_id)
             .order_by(NoobThread.created_at.desc())
         )
         return session.exec(stmt).first()
@@ -186,7 +186,7 @@ def update_noob_thread_status(thread_id: str, status: str) -> NoobThread:
         session.refresh(thread)
         return thread
 
-def list_sessions(user_id: str, project_id: str) -> list[TaskSession]:
+def list_rooms(user_id: str, project_id: str) -> list[TaskRoom]:
     with Session(get_engine()) as session:
-        stmt = select(TaskSession).where(TaskSession.user_id == user_id, TaskSession.project_id == project_id)
+        stmt = select(TaskRoom).where(TaskRoom.user_id == user_id, TaskRoom.project_id == project_id)
         return list(session.exec(stmt).all())

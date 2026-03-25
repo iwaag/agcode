@@ -1,6 +1,6 @@
 FROM node:20-bookworm-slim
 
-ENV NOOB_SESSION_ROOT=/mnt/session \
+ENV NOOB_ROOM_ROOT=/mnt/room \
     NOOB_AGENT_COMMAND=pi-coding-agent
 
 WORKDIR /app

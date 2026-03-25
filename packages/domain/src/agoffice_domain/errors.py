@@ -1,30 +1,30 @@
-class SessionError(Exception):
+class RoomError(Exception):
     pass
 
 
-class SessionNotFoundError(SessionError):
+class RoomNotFoundError(RoomError):
     pass
 
 
-class SessionAccessDeniedError(SessionError):
+class RoomAccessDeniedError(RoomError):
     pass
 
 
-class NoobSessionConflictError(SessionError):
+class NoobRoomConflictError(RoomError):
     pass
 
 
-class NoobThreadNotFoundError(SessionError):
+class NoobThreadNotFoundError(RoomError):
     pass
 
 
-class MissionNotFoundError(SessionError):
+class MissionNotFoundError(RoomError):
     pass
 
 
-class MissionAccessDeniedError(SessionError):
+class MissionAccessDeniedError(RoomError):
     pass
 
 
-class MissionConflictError(SessionError):
+class MissionConflictError(RoomError):
     pass

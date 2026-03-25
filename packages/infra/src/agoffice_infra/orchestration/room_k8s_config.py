@@ -1,9 +1,9 @@
 import os
 import re
 
-from agoffice_infra.config import get_session_runtime_settings
+from agoffice_infra.config import get_room_runtime_settings
 
-SETTINGS = get_session_runtime_settings()
+SETTINGS = get_room_runtime_settings()
 RUNTIME_MODE = SETTINGS.runtime_mode
 IMAGE_NAME_CODER_PRO = SETTINGS.image_name_coder_pro
 IMAGE_NAME_CODER_NOOB = SETTINGS.image_name_coder_noob
@@ -91,25 +91,25 @@ def get_image_pull_policy() -> str | None:
     return None
 
 
-def session_resource_names(session_id: str) -> dict[str, str]:
-    task_name = to_k8s_name_fragment(session_id)
+def room_resource_names(room_id: str) -> dict[str, str]:
+    task_name = to_k8s_name_fragment(room_id)
     return {
-        "pro_pvc_name": f"pvc-session-{task_name}-pro",
-        "pro_pod_name": f"worker-session-{task_name}-pro",
-        "pro_service_name": f"svc-session-{task_name}-pro",
-        "noob_pvc_name": f"pvc-session-{task_name}-noob",
-        "noob_pod_name": f"worker-session-{task_name}-noob",
+        "pro_pvc_name": f"pvc-room-{task_name}-pro",
+        "pro_pod_name": f"worker-room-{task_name}-pro",
+        "pro_service_name": f"svc-room-{task_name}-pro",
+        "noob_pvc_name": f"pvc-room-{task_name}-noob",
+        "noob_pod_name": f"worker-room-{task_name}-noob",
         "noob_prep_job_name": f"workspace-prep-{task_name}-noob",
     }
 
 
-def get_pro_service_name(session_id: str) -> str:
-    return session_resource_names(session_id)["pro_service_name"]
+def get_pro_service_name(room_id: str) -> str:
+    return room_resource_names(room_id)["pro_service_name"]
 
 
-def get_noob_pod_name(session_id: str) -> str:
-    return session_resource_names(session_id)["noob_pod_name"]
+def get_noob_pod_name(room_id: str) -> str:
+    return room_resource_names(room_id)["noob_pod_name"]
 
 
-def get_noob_prep_job_name(session_id: str) -> str:
-    return session_resource_names(session_id)["noob_prep_job_name"]
+def get_noob_prep_job_name(room_id: str) -> str:
+    return room_resource_names(room_id)["noob_prep_job_name"]

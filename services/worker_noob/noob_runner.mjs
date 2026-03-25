@@ -3,15 +3,15 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 
-const sessionRoot = process.env.NOOB_SESSION_ROOT || "/mnt/session";
+const roomRoot = process.env.NOOB_ROOM_ROOT || "/mnt/room";
 const pollIntervalMs = Number(process.env.NOOB_POLL_INTERVAL_MS || "1000");
 const heartbeatIntervalMs = Number(process.env.NOOB_HEARTBEAT_INTERVAL_MS || "5000");
 const agentCommand = process.env.NOOB_AGENT_COMMAND || "pi-coding-agent";
 
-const controlDir = path.join(sessionRoot, "control");
-const eventsDir = path.join(sessionRoot, "events");
-const stateDir = path.join(sessionRoot, "state");
-const artifactsDir = path.join(sessionRoot, "artifacts");
+const controlDir = path.join(roomRoot, "control");
+const eventsDir = path.join(roomRoot, "events");
+const stateDir = path.join(roomRoot, "state");
+const artifactsDir = path.join(roomRoot, "artifacts");
 const requestPath = path.join(controlDir, "request.json");
 const requestProcessingPath = path.join(controlDir, "request.processing.json");
 const eventsPath = path.join(eventsDir, "events.jsonl");
@@ -93,8 +93,8 @@ function buildPrompt(request) {
 async function resolveWorkingDirectory(request) {
   const requested = typeof request.workspace_path === "string" && request.workspace_path.length > 0
     ? request.workspace_path
-    : sessionRoot;
-  const candidate = path.isAbsolute(requested) ? requested : path.join(sessionRoot, requested);
+    : roomRoot;
+  const candidate = path.isAbsolute(requested) ? requested : path.join(roomRoot, requested);
   const info = await stat(candidate);
   if (!info.isDirectory()) {
     throw new Error(`workspace_path is not a directory: ${candidate}`);
@@ -109,14 +109,14 @@ async function runRequest(request) {
   const invocation = buildAgentInvocation(request);
   const outputPath = path.isAbsolute(request.output_file_path || "")
     ? request.output_file_path
-    : path.join(sessionRoot, request.output_file_path || "artifacts/response.md");
+    : path.join(roomRoot, request.output_file_path || "artifacts/response.md");
   await mkdir(path.dirname(outputPath), { recursive: true });
 
   await writeFile(eventsPath, "", "utf8");
   await rm(resultPath, { force: true });
   await appendEvent({
     type: "accepted",
-    session_id: process.env.TASK_ID || null,
+    room_id: process.env.TASK_ID || null,
     payload: { thread_id: request.thread_id || null },
   });
   await updateStatus("running");

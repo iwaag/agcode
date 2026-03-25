@@ -28,5 +28,5 @@ async def subscribe(channel: str) -> AsyncGenerator[str, None]:
         await r.aclose()
 
 
-def session_channel(session_id: str) -> str:
-    return f"session:{session_id}"
+def room_channel(room_id: str) -> str:
+    return f"room:{room_id}"

@@ -1,6 +1,6 @@
 FROM debian:bookworm-slim
 
-ENV NOOB_SESSION_ROOT=/mnt/session
+ENV NOOB_ROOM_ROOT=/mnt/room
 
 WORKDIR /app
 

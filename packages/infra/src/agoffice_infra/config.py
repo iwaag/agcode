@@ -32,7 +32,7 @@ class RedisSettings:
 
 
 @dataclass(frozen=True)
-class SessionRuntimeSettings:
+class RoomRuntimeSettings:
     runtime_mode: str
     image_name_coder_pro: str | None
     image_name_coder_noob: str | None
@@ -70,10 +70,10 @@ def get_redis_settings() -> RedisSettings:
     )
 
 
-def get_session_runtime_settings() -> SessionRuntimeSettings:
+def get_room_runtime_settings() -> RoomRuntimeSettings:
     default_remote_config = _project_root() / "deploy" / "k8s" / "remote-config.yaml"
-    return SessionRuntimeSettings(
-        runtime_mode=os.getenv("SESSION_RUNTIME_MODE", "remote"),
+    return RoomRuntimeSettings(
+        runtime_mode=os.getenv("ROOM_RUNTIME_MODE", "remote"),
         image_name_coder_pro=os.getenv("IMAGE_NAME_CODER_PRO"),
         image_name_coder_noob=os.getenv("IMAGE_NAME_CODER_NOOB"),
         image_name_coder_noob_prep=os.getenv("IMAGE_NAME_CODER_NOOB_PREP"),
@@ -81,14 +81,14 @@ def get_session_runtime_settings() -> SessionRuntimeSettings:
         local_image_name_coder_noob=os.getenv("LOCAL_IMAGE_NAME_CODER_NOOB"),
         local_image_name_coder_noob_prep=os.getenv("LOCAL_IMAGE_NAME_CODER_NOOB_PREP"),
         worker_build_id=os.getenv("WORKER_BUILD_ID", ""),
-        namespace=os.getenv("SESSION_K8S_NAMESPACE", "default"),
-        storage_class_name=os.getenv("SESSION_K8S_STORAGE_CLASS", "microk8s-hostpath"),
-        pvc_size=os.getenv("SESSION_K8S_PVC_SIZE", "1Gi"),
-        scheduling_timeout_seconds=int(os.getenv("SESSION_SCHEDULING_TIMEOUT_SECONDS", "30")),
-        worker_port=int(os.getenv("SESSION_WORKER_PORT", "8000")),
-        worker_socketio_path=os.getenv("SESSION_WORKER_SOCKETIO_PATH", "/chat/realtime"),
-        remote_config_path=Path(os.getenv("SESSION_REMOTE_CONFIG_PATH", str(default_remote_config))),
-        noob_runtime_class_name=os.getenv("SESSION_NOOB_RUNTIME_CLASS", "runsc"),
-        pro_mount_path=os.getenv("SESSION_PRO_MOUNT_PATH", "/mnt/data"),
-        noob_mount_path=os.getenv("SESSION_NOOB_MOUNT_PATH", "/mnt/session"),
+        namespace=os.getenv("ROOM_K8S_NAMESPACE", "default"),
+        storage_class_name=os.getenv("ROOM_K8S_STORAGE_CLASS", "microk8s-hostpath"),
+        pvc_size=os.getenv("ROOM_K8S_PVC_SIZE", "1Gi"),
+        scheduling_timeout_seconds=int(os.getenv("ROOM_SCHEDULING_TIMEOUT_SECONDS", "30")),
+        worker_port=int(os.getenv("ROOM_WORKER_PORT", "8000")),
+        worker_socketio_path=os.getenv("ROOM_WORKER_SOCKETIO_PATH", "/chat/realtime"),
+        remote_config_path=Path(os.getenv("ROOM_REMOTE_CONFIG_PATH", str(default_remote_config))),
+        noob_runtime_class_name=os.getenv("ROOM_NOOB_RUNTIME_CLASS", "runsc"),
+        pro_mount_path=os.getenv("ROOM_PRO_MOUNT_PATH", "/mnt/data"),
+        noob_mount_path=os.getenv("ROOM_NOOB_MOUNT_PATH", "/mnt/room"),
     )

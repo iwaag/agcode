@@ -18,12 +18,12 @@ from agoffice_domain.schema import (
     NoobTaskStatus,
     NoobWorkspacePrepRequest,
     NoobWorkspacePrepStatus,
-    SessionInfo,
+    RoomInfo,
     TunnelInfo,
 )
 from agoffice_infra.db import database as db
 
-from .session_k8s_config import (
+from .room_k8s_config import (
     CLIENT_ID,
     HATCHET_CLIENT_HOST_PORT,
     HATCHET_CLIENT_SERVER_URL,
@@ -59,16 +59,16 @@ from .session_k8s_config import (
     get_noob_pod_name,
     get_noob_prep_job_name,
     get_pro_service_name,
-    session_resource_names,
+    room_resource_names,
 )
-from .session_k8s_noob_io import (
+from .room_k8s_noob_io import (
     exec_in_pod,
     read_optional_json_file,
     read_optional_text_file,
     submit_noob_request_file,
     write_text_file_atomic,
 )
-from .session_k8s_resources import (
+from .room_k8s_resources import (
     build_noob_prep_job,
     build_noob_security_context,
     build_pod,
@@ -86,18 +86,18 @@ from .session_k8s_resources import (
 )
 
 
-def _get_session_or_raise(session_id: str) -> object:
-    session_info = db.get_session(session_id)
-    if session_info is None:
-        raise ValueError(f"Session {session_id} not found")
-    return session_info
+def _get_room_or_raise(room_id: str) -> object:
+    room_info = db.get_room(room_id)
+    if room_info is None:
+        raise ValueError(f"Room {room_id} not found")
+    return room_info
 
 
-def _get_noob_session_or_raise(session_id: str) -> object:
-    session_info = db.get_noob_session(session_id)
-    if session_info is None:
-        raise ValueError(f"NOOB session {session_id} not found")
-    return session_info
+def _get_noob_room_or_raise(room_id: str) -> object:
+    room_info = db.get_noob_room(room_id)
+    if room_info is None:
+        raise ValueError(f"NOOB room {room_id} not found")
+    return room_info
 
 
 def _mission_workspace_name(repo_url: str, title: str) -> str:
@@ -158,15 +158,15 @@ def _run_checked_shell_in_pod(v1: client.CoreV1Api, *, pod_name: str, script: st
     return "\n".join(filtered_lines).strip()
 
 
-def get_pro_realtime_socketio_base_url(session_id: str) -> str:
-    _get_session_or_raise(session_id)
-    service_name = get_pro_service_name(session_id)
+def get_pro_realtime_socketio_base_url(room_id: str) -> str:
+    _get_room_or_raise(room_id)
+    service_name = get_pro_service_name(room_id)
     return f"http://{service_name}.{NAMESPACE}.svc.cluster.local:{WORKER_PORT}"
 
 
-def _build_prep_status_payload(*, session_id: str, status: str, error: str | None = None) -> NoobWorkspacePrepStatus:
-    session = _get_noob_session_or_raise(session_id)
-    config_data = getattr(session, "config", {}) or {}
+def _build_prep_status_payload(*, room_id: str, status: str, error: str | None = None) -> NoobWorkspacePrepStatus:
+    room = _get_noob_room_or_raise(room_id)
+    config_data = getattr(room, "config", {}) or {}
     prep = config_data.get("prep", {})
     repo_url = prep.get("repo_url") if isinstance(prep, dict) else None
     ref = prep.get("ref") if isinstance(prep, dict) else None
@@ -180,16 +180,16 @@ def _build_prep_status_payload(*, session_id: str, status: str, error: str | Non
 
 
 async def run_noob_workspace_prep(
-    session_id: str,
+    room_id: str,
     *,
     user_id: str,
     prep_request: NoobWorkspacePrepRequest,
 ) -> NoobWorkspacePrepStatus:
-    _get_noob_session_or_raise(session_id)
+    _get_noob_room_or_raise(room_id)
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
     batch_v1 = client.BatchV1Api()
-    names = session_resource_names(session_id)
+    names = room_resource_names(room_id)
     pvc_name = names["noob_pvc_name"]
     pod_name = names["noob_pod_name"]
     existing_pod = read_pod_if_exists(v1, pod_name)
@@ -198,38 +198,38 @@ async def run_noob_workspace_prep(
     ensure_pvc(v1, pvc_name)
     wait_for_pvc_bound(v1, pvc_name)
     job = build_noob_prep_job(
-        session_id=session_id,
+        room_id=room_id,
         user_id=user_id,
         pvc_name=pvc_name,
         prep_request=prep_request,
     )
     await asyncio.to_thread(create_or_reuse_job, batch_v1, job)
-    return _build_prep_status_payload(session_id=session_id, status="running")
+    return _build_prep_status_payload(room_id=room_id, status="running")
 
 
 async def submit_noob_task(
-    session_id: str,
+    room_id: str,
     *,
     user_id: str,
     token: str,
     request: NoobTaskRequest,
 ) -> NoobTaskStatus:
-    _get_noob_session_or_raise(session_id)
-    workspace_status = await get_noob_workspace_status(session_id)
+    _get_noob_room_or_raise(room_id)
+    workspace_status = await get_noob_workspace_status(room_id)
     if workspace_status.status != "ready":
-        raise RuntimeError(f"NOOB workspace is not ready for session {session_id}")
-    await run_noob_session(session_id=session_id, user_id=user_id, token=token)
+        raise RuntimeError(f"NOOB workspace is not ready for room {room_id}")
+    await run_noob_room(room_id=room_id, user_id=user_id, token=token)
     v1 = load_kube_v1()
-    pod_name = get_noob_pod_name(session_id)
+    pod_name = get_noob_pod_name(room_id)
     wait_for_pod_ready(v1, pod_name)
     await asyncio.to_thread(submit_noob_request_file, v1, pod_name=pod_name, request=request)
-    return await get_noob_task_status(session_id)
+    return await get_noob_task_status(room_id)
 
 
-async def get_noob_task_status(session_id: str) -> NoobTaskStatus:
-    _get_noob_session_or_raise(session_id)
+async def get_noob_task_status(room_id: str) -> NoobTaskStatus:
+    _get_noob_room_or_raise(room_id)
     v1 = load_kube_v1()
-    pod_name = get_noob_pod_name(session_id)
+    pod_name = get_noob_pod_name(room_id)
     wait_for_pod_ready(v1, pod_name)
     payload = await asyncio.to_thread(read_optional_json_file, v1, pod_name=pod_name, path=NOOB_STATUS_PATH)
     if not payload:
@@ -237,10 +237,10 @@ async def get_noob_task_status(session_id: str) -> NoobTaskStatus:
     return NoobTaskStatus.model_validate(payload)
 
 
-async def get_noob_task_result(session_id: str) -> NoobTaskResult:
-    _get_noob_session_or_raise(session_id)
+async def get_noob_task_result(room_id: str) -> NoobTaskResult:
+    _get_noob_room_or_raise(room_id)
     v1 = load_kube_v1()
-    pod_name = get_noob_pod_name(session_id)
+    pod_name = get_noob_pod_name(room_id)
     wait_for_pod_ready(v1, pod_name)
     payload = await asyncio.to_thread(read_optional_json_file, v1, pod_name=pod_name, path=NOOB_RESULT_PATH)
     if not payload:
@@ -248,10 +248,10 @@ async def get_noob_task_result(session_id: str) -> NoobTaskResult:
     return NoobTaskResult.model_validate(payload)
 
 
-async def get_noob_task_events(session_id: str, tail: int = 200) -> NoobTaskEvents:
-    _get_noob_session_or_raise(session_id)
+async def get_noob_task_events(room_id: str, tail: int = 200) -> NoobTaskEvents:
+    _get_noob_room_or_raise(room_id)
     v1 = load_kube_v1()
-    pod_name = get_noob_pod_name(session_id)
+    pod_name = get_noob_pod_name(room_id)
     wait_for_pod_ready(v1, pod_name)
     content = await asyncio.to_thread(
         read_optional_text_file,
@@ -266,33 +266,33 @@ async def get_noob_task_events(session_id: str, tail: int = 200) -> NoobTaskEven
     return NoobTaskEvents.model_validate({"events": events})
 
 
-async def get_noob_workspace_status(session_id: str) -> NoobWorkspacePrepStatus:
-    _get_noob_session_or_raise(session_id)
+async def get_noob_workspace_status(room_id: str) -> NoobWorkspacePrepStatus:
+    _get_noob_room_or_raise(room_id)
     batch_v1 = load_kube_batch_v1()
-    job_name = get_noob_prep_job_name(session_id)
+    job_name = get_noob_prep_job_name(room_id)
     try:
         job = batch_v1.read_namespaced_job(name=job_name, namespace=NAMESPACE)
     except ApiException as e:
         if e.status == 404:
-            return _build_prep_status_payload(session_id=session_id, status="not_requested")
+            return _build_prep_status_payload(room_id=room_id, status="not_requested")
         raise
     conditions = job.status.conditions or []
     for condition in conditions:
         if condition.type == "Complete" and condition.status == "True":
-            return _build_prep_status_payload(session_id=session_id, status="ready")
+            return _build_prep_status_payload(room_id=room_id, status="ready")
         if condition.type == "Failed" and condition.status == "True":
             return _build_prep_status_payload(
-                session_id=session_id,
+                room_id=room_id,
                 status="failed",
                 error=condition.message or "workspace prep failed",
             )
     if (job.status.active or 0) > 0:
-        return _build_prep_status_payload(session_id=session_id, status="running")
+        return _build_prep_status_payload(room_id=room_id, status="running")
     if (job.status.succeeded or 0) > 0:
-        return _build_prep_status_payload(session_id=session_id, status="ready")
+        return _build_prep_status_payload(room_id=room_id, status="ready")
     if (job.status.failed or 0) > 0:
-        return _build_prep_status_payload(session_id=session_id, status="failed", error="workspace prep failed")
-    return _build_prep_status_payload(session_id=session_id, status="pending")
+        return _build_prep_status_payload(room_id=room_id, status="failed", error="workspace prep failed")
+    return _build_prep_status_payload(room_id=room_id, status="pending")
 
 
 def _post_json_via_pod_portforward(
@@ -370,16 +370,16 @@ def _post_json_via_pod_portforward(
             close_pf()
 
 
-async def start_tunnel(session_id: str, tunnel_name: str, token: str) -> TunnelInfo:
-    _get_session_or_raise(session_id)
+async def start_tunnel(room_id: str, tunnel_name: str, token: str) -> TunnelInfo:
+    _get_room_or_raise(room_id)
 
     print(f"[start_tunnel] loading kubeconfig from {REMOTE_CONFIG_PATH}")
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = session_resource_names(session_id)
+    names = room_resource_names(room_id)
     pod_name = names["pro_pod_name"]
     print(
-        f"[start_tunnel] starting tunnel request: session_id={session_id} pod_name={pod_name} "
+        f"[start_tunnel] starting tunnel request: room_id={room_id} pod_name={pod_name} "
         f"tunnel_name={tunnel_name}"
     )
     print(f"[start_tunnel] waiting for pod readiness: pod={pod_name}")
@@ -405,12 +405,12 @@ async def start_tunnel(session_id: str, tunnel_name: str, token: str) -> TunnelI
     return TunnelInfo(tunnel_name=payload["tunnel_name"])
 
 
-async def run_session(session_id: str, project_id: str, user_id: str, token: str) -> SessionInfo:
-    _get_session_or_raise(session_id)
+async def run_room(room_id: str, project_id: str, user_id: str, token: str) -> RoomInfo:
+    _get_room_or_raise(room_id)
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = session_resource_names(session_id)
+    names = room_resource_names(room_id)
     pro_pvc_name = names["pro_pvc_name"]
     pro_pod_name = names["pro_pod_name"]
     pro_service_name = names["pro_service_name"]
@@ -419,7 +419,7 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
 
     pro_pod_spec = build_pod(
         pod_name=pro_pod_name,
-        session_id=session_id,
+        room_id=room_id,
         user_id=user_id,
         role="pro",
         token=token,
@@ -434,31 +434,31 @@ async def run_session(session_id: str, project_id: str, user_id: str, token: str
         v1,
         service_name=pro_service_name,
         selector={
-            "task-id": session_id,
-            "type": "session-worker",
+            "task-id": room_id,
+            "type": "room-worker",
             "role": "pro",
         },
     )
     wait_for_pod_ready(v1, pro_pod_name)
     wait_for_service_endpoints(v1, pro_service_name)
 
-    return SessionInfo(id=session_id)
+    return RoomInfo(id=room_id)
 
-def auto_choose_session(mission: MissionRecord) -> SessionInfo:
+def auto_choose_room(mission: MissionRecord) -> RoomInfo:
     #lazy stub
-    session_list = db.list_sessions(user_id=mission.user_id, project_id=mission.project_id)
-    return SessionInfo(id=session_list[0].id)
+    room_list = db.list_rooms(user_id=mission.user_id, project_id=mission.project_id)
+    return RoomInfo(id=room_list[0].id)
 
-async def start_mission(*, session_id: str, mission: MissionRecord) -> MissionRecord:
-    session: SessionInfo | None = None
-    if not session_id:
-        session = auto_choose_session(mission)
+async def start_mission(*, room_id: str, mission: MissionRecord) -> MissionRecord:
+    room: RoomInfo | None = None
+    if not room_id:
+        room = auto_choose_room(mission)
     else:
-        session = _get_session_or_raise(session_id)
+        room = _get_room_or_raise(room_id)
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    pod_name = session_resource_names(session.id)["pro_pod_name"]
+    pod_name = room_resource_names(room.id)["pro_pod_name"]
     wait_for_pod_ready(v1, pod_name)
 
     mission_root = posixpath.join(PRO_MOUNT_PATH, "missions")
@@ -499,16 +499,16 @@ async def start_mission(*, session_id: str, mission: MissionRecord) -> MissionRe
         path=posixpath.join(mission_dir, "AGENT.md"),
         content=_build_agent_md(mission=mission),
     )
-    mission.session_id = session.id
+    mission.room_id = room.id
     return mission
 
 
-async def run_noob_session(session_id: str, *, user_id: str, token: str) -> SessionInfo:
-    _get_noob_session_or_raise(session_id)
+async def run_noob_room(room_id: str, *, user_id: str, token: str) -> RoomInfo:
+    _get_noob_room_or_raise(room_id)
 
     config.load_kube_config(config_file=str(REMOTE_CONFIG_PATH))
     v1 = client.CoreV1Api()
-    names = session_resource_names(session_id)
+    names = room_resource_names(room_id)
     noob_pvc_name = names["noob_pvc_name"]
     noob_pod_name = names["noob_pod_name"]
 
@@ -517,7 +517,7 @@ async def run_noob_session(session_id: str, *, user_id: str, token: str) -> Sess
 
     noob_pod_spec = build_pod(
         pod_name=noob_pod_name,
-        session_id=session_id,
+        room_id=room_id,
         user_id=user_id,
         role="noob",
         token=token,
@@ -527,10 +527,10 @@ async def run_noob_session(session_id: str, *, user_id: str, token: str) -> Sess
         runtime_class_name=NOOB_RUNTIME_CLASS_NAME or None,
         security_context=build_noob_security_context(),
         extra_env=[
-            client.V1EnvVar(name="NOOB_SESSION_ROOT", value=NOOB_MOUNT_PATH),
+            client.V1EnvVar(name="NOOB_ROOM_ROOT", value=NOOB_MOUNT_PATH),
         ],
     )
     create_or_reuse_pod(v1, noob_pod_spec)
     wait_for_node_assignment(v1, noob_pod_name)
     wait_for_pod_ready(v1, noob_pod_name)
-    return SessionInfo(id=session_id)
+    return RoomInfo(id=room_id)

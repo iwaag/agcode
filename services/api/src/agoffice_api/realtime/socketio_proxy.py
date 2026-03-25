@@ -7,15 +7,15 @@ import socketio
 from agpyutils.auth import get_auth_info
 from fastapi.security import HTTPAuthorizationCredentials
 
-from agoffice_domain import session_service
-from agoffice_domain.errors import SessionAccessDeniedError, SessionNotFoundError
+from agoffice_domain import room_service
+from agoffice_domain.errors import RoomAccessDeniedError, RoomNotFoundError
 from agoffice_infra.db import database as db
-from agoffice_infra.orchestration import session_k8s as task_session
+from agoffice_infra.orchestration import room_k8s as task_room
 
-SOCKETIO_PATH = os.getenv("SESSION_SOCKETIO_PATH", "/session/socket.io")
-UPSTREAM_SOCKETIO_PATH = task_session.WORKER_SOCKETIO_PATH
-PROXY_NAMESPACE = os.getenv("SESSION_SOCKETIO_NAMESPACE", "/")
-UPSTREAM_NAMESPACE = os.getenv("SESSION_WORKER_SOCKETIO_NAMESPACE", "/")
+SOCKETIO_PATH = os.getenv("ROOM_SOCKETIO_PATH", "/room/socket.io")
+UPSTREAM_SOCKETIO_PATH = task_room.WORKER_SOCKETIO_PATH
+PROXY_NAMESPACE = os.getenv("ROOM_SOCKETIO_NAMESPACE", "/")
+UPSTREAM_NAMESPACE = os.getenv("ROOM_WORKER_SOCKETIO_NAMESPACE", "/")
 
 
 def _normalize_namespace(value: str) -> str:
@@ -62,7 +62,7 @@ class _ProxyNamespace(socketio.AsyncNamespace):
         self._lock = asyncio.Lock()
 
     async def on_connect(self, sid, environ, auth):
-        session_id = self._extract_session_id(environ=environ, auth=auth)
+        room_id = self._extract_room_id(environ=environ, auth=auth)
         token = self._extract_token(environ=environ, auth=auth)
         if not token:
             raise ConnectionRefusedError("missing_bearer_token")
@@ -71,16 +71,16 @@ class _ProxyNamespace(socketio.AsyncNamespace):
         auth_info = await get_auth_info(credentials=credentials)
 
         try:
-            upstream_base_url = session_service.get_owned_realtime_base_url(
+            upstream_base_url = room_service.get_owned_realtime_base_url(
                 db,
-                task_session,
-                session_id=session_id,
+                task_room,
+                room_id=room_id,
                 user_id=auth_info.user_id,
             )
-        except SessionNotFoundError as exc:
-            raise ConnectionRefusedError("session_not_found") from exc
-        except SessionAccessDeniedError as exc:
-            raise ConnectionRefusedError("session_access_denied") from exc
+        except RoomNotFoundError as exc:
+            raise ConnectionRefusedError("room_not_found") from exc
+        except RoomAccessDeniedError as exc:
+            raise ConnectionRefusedError("room_access_denied") from exc
 
         upstream = socketio.AsyncClient(
             reconnection=False,
@@ -123,18 +123,18 @@ class _ProxyNamespace(socketio.AsyncNamespace):
         await bridge.upstream.emit(event, payload, namespace=UPSTREAM_NAMESPACE)
 
     @staticmethod
-    def _extract_session_id(environ: dict, auth: dict | None) -> str:
+    def _extract_room_id(environ: dict, auth: dict | None) -> str:
         if isinstance(auth, dict):
-            value = auth.get("session_id")
+            value = auth.get("room_id")
             if isinstance(value, str) and value:
                 return value
 
         query = parse_qs(environ.get("QUERY_STRING", ""))
-        values = query.get("session_id", [])
+        values = query.get("room_id", [])
         if values and values[0]:
             return values[0]
 
-        raise ConnectionRefusedError("missing_session_id")
+        raise ConnectionRefusedError("missing_room_id")
 
     @staticmethod
     def _extract_token(environ: dict, auth: dict | None) -> str | None:

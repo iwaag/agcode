@@ -1,17 +1,17 @@
 #!/bin/sh
 set -eu
 
-SESSION_ROOT="${NOOB_SESSION_ROOT:-/mnt/session}"
-WORKSPACE_ROOT="${SESSION_ROOT}/workspace"
-STATE_DIR="${SESSION_ROOT}/state"
-CONTEXT_DIR="${SESSION_ROOT}/context"
+ROOM_ROOT="${NOOB_ROOM_ROOT:-/mnt/room}"
+WORKSPACE_ROOT="${ROOM_ROOT}/workspace"
+STATE_DIR="${ROOM_ROOT}/state"
+CONTEXT_DIR="${ROOM_ROOT}/context"
 READY_PATH="${STATE_DIR}/context-ready.json"
 ERROR_PATH="${STATE_DIR}/context-error.json"
 
 mkdir -p "${WORKSPACE_ROOT}" "${STATE_DIR}" "${CONTEXT_DIR}"
 rm -f "${READY_PATH}" "${ERROR_PATH}"
 
-export SESSION_ROOT WORKSPACE_ROOT STATE_DIR CONTEXT_DIR READY_PATH ERROR_PATH
+export ROOM_ROOT WORKSPACE_ROOT STATE_DIR CONTEXT_DIR READY_PATH ERROR_PATH
 
 write_error_marker() {
   ERROR_MESSAGE="$1" python3 - <<'PY'
@@ -42,7 +42,7 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-session_root = Path(os.environ["SESSION_ROOT"])
+room_root = Path(os.environ["ROOM_ROOT"])
 workspace_root = Path(os.environ["WORKSPACE_ROOT"])
 ready_path = Path(os.environ["READY_PATH"])
 error_path = Path(os.environ["ERROR_PATH"])

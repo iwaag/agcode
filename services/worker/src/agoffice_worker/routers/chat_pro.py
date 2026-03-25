@@ -5,10 +5,10 @@ from urllib.parse import parse_qs
 
 import socketio
 
-from agoffice_worker.services.pro_chat import ChatSession
+from agoffice_worker.services.pro_chat import ChatRoom
 
 socket_server = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
-_sessions: dict[str, ChatSession] = {}
+_rooms: dict[str, ChatRoom] = {}
 
 AGENT_PROVIDER = os.getenv("AGENT_PROVIDER")
 if AGENT_PROVIDER not in {None, "", "CODEX", "CLAUDE"}:
@@ -75,30 +75,30 @@ def _resolve_provider(auth: Any, environ: dict[str, Any]) -> str:
 async def connect(sid: str, environ: dict[str, Any], auth: Any | None = None) -> None:
     logging.info("CONNECTING")
     provider = _resolve_provider(auth, environ)
-    session = ChatSession(SocketIOTransport(sid), provider)
-    _sessions[sid] = session
-    await session.start()
+    room = ChatRoom(SocketIOTransport(sid), provider)
+    _rooms[sid] = room
+    await room.start()
 
 
 @socket_server.event
 async def disconnect(sid: str) -> None:
-    _sessions.pop(sid, None)
+    _rooms.pop(sid, None)
 
 
 @socket_server.on("ping")
 async def ping(sid: str, payload: Any | None = None) -> None:
-    session = _sessions.get(sid)
-    if session is None:
+    room = _rooms.get(sid)
+    if room is None:
         return
-    await session.handle_message({"type": "ping"})
+    await room.handle_message({"type": "ping"})
 
 
 @socket_server.on("close")
 async def close(sid: str, payload: Any | None = None) -> None:
-    session = _sessions.get(sid)
-    if session is None:
+    room = _rooms.get(sid)
+    if room is None:
         return
-    await session.handle_message({"type": "close"})
+    await room.handle_message({"type": "close"})
 
 
 FILE_PATH_MAP: dict[str, str] = {
@@ -137,12 +137,12 @@ async def user_file(_sid: str, payload: Any = None) -> None:
 @socket_server.on("user_message")
 async def user_message(sid: str, payload: Any = None) -> None:
     logging.info("user_message: %s", payload)
-    session = _sessions.get(sid)
-    if session is None:
+    room = _rooms.get(sid)
+    if room is None:
         return
 
     content = payload
     if isinstance(payload, dict):
         content = payload.get("content", "")
 
-    await session.handle_message({"type": "user_message", "content": content})
+    await room.handle_message({"type": "user_message", "content": content})

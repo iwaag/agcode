@@ -8,11 +8,11 @@ from agoffice_domain.errors import (
     MissionAccessDeniedError,
     MissionConflictError,
     MissionNotFoundError,
-    SessionAccessDeniedError,
-    SessionNotFoundError,
+    RoomAccessDeniedError,
+    RoomNotFoundError,
 )
 from agoffice_domain.schema import MissionCreateRequest, MissionInfo, MissionListInfo
-from agoffice_domain.session_mapping import SessionModel
+from agoffice_domain.room_mapping import RoomModel
 
 
 class MissionRecord(Protocol):
@@ -20,7 +20,7 @@ class MissionRecord(Protocol):
     title: str
     repo_url: str
     instruction: str
-    session_id: str | None
+    room_id: str | None
     user_id: str
     project_id: str
     created_at: datetime
@@ -36,15 +36,15 @@ class MissionRepository(Protocol):
         self,
         mission_id: str,
         *,
-        session_id: str | None = None,
+        room_id: str | None = None,
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
     ) -> MissionRecord: ...
-    def get_session(self, session_id: str) -> SessionModel | None: ...
+    def get_room(self, room_id: str) -> RoomModel | None: ...
 
 
 class MissionRuntime(Protocol):
-    async def start_mission(self, *, session_id: str, mission: MissionRecord) -> MissionRecord: ...
+    async def start_mission(self, *, room_id: str, mission: MissionRecord) -> MissionRecord: ...
 
 
 def _to_mission_info(model: MissionRecord) -> MissionInfo:
@@ -53,7 +53,7 @@ def _to_mission_info(model: MissionRecord) -> MissionInfo:
         title=model.title,
         repo_url=model.repo_url,
         instruction=model.instruction,
-        session_id=model.session_id,
+        room_id=model.room_id,
         user_id=model.user_id,
         project_id=model.project_id,
         created_at=model.created_at,
@@ -71,13 +71,13 @@ def _get_owned_mission(repository: MissionRepository, *, mission_id: str, user_i
     return mission
 
 
-def _get_owned_session(repository: MissionRepository, *, session_id: str, user_id: str) -> SessionModel:
-    session = repository.get_session(session_id)
-    if session is None:
-        raise SessionNotFoundError(f"Session {session_id} not found")
-    if session.user_id != user_id:
-        raise SessionAccessDeniedError(f"Session {session_id} access denied")
-    return session
+def _get_owned_room(repository: MissionRepository, *, room_id: str, user_id: str) -> RoomModel:
+    room = repository.get_room(room_id)
+    if room is None:
+        raise RoomNotFoundError(f"Room {room_id} not found")
+    if room.user_id != user_id:
+        raise RoomAccessDeniedError(f"Room {room_id} access denied")
+    return room
 
 
 def create_mission(
@@ -130,20 +130,20 @@ async def start_mission(
     runtime: MissionRuntime,
     *,
     mission_id: str,
-    session_id: str,
+    room_id: str,
     user_id: str,
 ) -> MissionInfo:
     mission = _get_owned_mission(repository, mission_id=mission_id, user_id=user_id)
-    if session_id:
-        session = _get_owned_session(repository, session_id=session_id, user_id=user_id)
-        if mission.project_id != session.project_id:
-            raise MissionConflictError("Mission project_id does not match session project_id")
-    if mission.started_at is not None or mission.session_id is not None:
+    if room_id:
+        room = _get_owned_room(repository, room_id=room_id, user_id=user_id)
+        if mission.project_id != room.project_id:
+            raise MissionConflictError("Mission project_id does not match room project_id")
+    if mission.started_at is not None or mission.room_id is not None:
         raise MissionConflictError(f"Mission {mission_id} is already started")
-    mission = await runtime.start_mission(session_id=session_id, mission=mission)
+    mission = await runtime.start_mission(room_id=room_id, mission=mission)
     updated = repository.update_mission(
         mission.id,
-        session_id=mission.session_id,
+        room_id=mission.room_id,
         started_at=datetime.now(),
     )
     return _to_mission_info(updated)

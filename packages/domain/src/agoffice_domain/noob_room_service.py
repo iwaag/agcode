@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agoffice_domain.errors import NoobSessionConflictError, NoobThreadNotFoundError, SessionAccessDeniedError, SessionNotFoundError
+from agoffice_domain.errors import NoobRoomConflictError, NoobThreadNotFoundError, RoomAccessDeniedError, RoomNotFoundError
 from agoffice_domain.schema import (
-    NoobSessionCreateRequest,
-    NoobSessionInfo,
+    NoobRoomCreateRequest,
+    NoobRoomInfo,
     NoobWorkspacePrepSpec,
     NoobWorkspacePrepRequest,
     NoobThreadCreateRequest,
@@ -13,8 +13,8 @@ from agoffice_domain.schema import (
 )
 
 
-def _to_noob_session_info(model: object) -> NoobSessionInfo:
-    return NoobSessionInfo(
+def _to_noob_room_info(model: object) -> NoobRoomInfo:
+    return NoobRoomInfo(
         id=getattr(model, "id"),
         user_id=getattr(model, "user_id"),
         project_id=getattr(model, "project_id"),
@@ -30,7 +30,7 @@ def _to_noob_session_info(model: object) -> NoobSessionInfo:
 def _to_noob_thread_info(model: object) -> NoobThreadInfo:
     return NoobThreadInfo(
         id=getattr(model, "id"),
-        noob_session_id=getattr(model, "noob_session_id"),
+        noob_room_id=getattr(model, "noob_room_id"),
         title=getattr(model, "title"),
         keep_context=getattr(model, "keep_context"),
         status=getattr(model, "status"),
@@ -39,40 +39,40 @@ def _to_noob_thread_info(model: object) -> NoobThreadInfo:
     )
 
 
-def create_noob_session(repository: object, *, user_id: str, request: NoobSessionCreateRequest) -> NoobSessionInfo:
-    active = repository.get_active_noob_session_for_user(user_id)
+def create_noob_room(repository: object, *, user_id: str, request: NoobRoomCreateRequest) -> NoobRoomInfo:
+    active = repository.get_active_noob_room_for_user(user_id)
     if active is not None:
-        raise NoobSessionConflictError(f"User {user_id} already has an active NOOB session: {active.id}")
-    return _to_noob_session_info(repository.new_noob_session(user_id=user_id, session_config=request))
+        raise NoobRoomConflictError(f"User {user_id} already has an active NOOB room: {active.id}")
+    return _to_noob_room_info(repository.new_noob_room(user_id=user_id, room_config=request))
 
 
-def get_owned_noob_session(repository: object, *, session_id: str, user_id: str) -> object:
-    session = repository.get_noob_session(session_id)
-    if session is None:
-        raise SessionNotFoundError(f"NOOB session {session_id} not found")
-    if session.user_id != user_id:
-        raise SessionAccessDeniedError(f"NOOB session {session_id} access denied")
-    return session
+def get_owned_noob_room(repository: object, *, room_id: str, user_id: str) -> object:
+    room = repository.get_noob_room(room_id)
+    if room is None:
+        raise RoomNotFoundError(f"NOOB room {room_id} not found")
+    if room.user_id != user_id:
+        raise RoomAccessDeniedError(f"NOOB room {room_id} access denied")
+    return room
 
 
 def create_or_get_thread(
     repository: object,
     *,
-    noob_session_id: str,
+    noob_room_id: str,
     user_id: str,
     request: NoobThreadCreateRequest,
 ) -> NoobThreadInfo:
-    get_owned_noob_session(repository, session_id=noob_session_id, user_id=user_id)
-    existing = repository.get_active_noob_thread(noob_session_id)
+    get_owned_noob_room(repository, room_id=noob_room_id, user_id=user_id)
+    existing = repository.get_active_noob_thread(noob_room_id)
     if existing is not None:
         return _to_noob_thread_info(existing)
-    return _to_noob_thread_info(repository.create_noob_thread(noob_session_id, request))
+    return _to_noob_thread_info(repository.create_noob_thread(noob_room_id, request))
 
 
-def get_owned_noob_thread(repository: object, *, noob_session_id: str, thread_id: str, user_id: str) -> object:
-    get_owned_noob_session(repository, session_id=noob_session_id, user_id=user_id)
+def get_owned_noob_thread(repository: object, *, noob_room_id: str, thread_id: str, user_id: str) -> object:
+    get_owned_noob_room(repository, room_id=noob_room_id, user_id=user_id)
     thread = repository.get_noob_thread(thread_id)
-    if thread is None or thread.noob_session_id != noob_session_id:
+    if thread is None or thread.noob_room_id != noob_room_id:
         raise NoobThreadNotFoundError(f"NOOB thread {thread_id} not found")
     return thread
 
@@ -92,16 +92,16 @@ def build_thread_task_request(thread: object, request: NoobThreadRequest) -> Noo
 def resolve_prep_request(
     repository: object,
     *,
-    noob_session_id: str,
+    noob_room_id: str,
     user_id: str,
     request: NoobWorkspacePrepRequest | None,
 ) -> NoobWorkspacePrepRequest:
-    session = get_owned_noob_session(repository, session_id=noob_session_id, user_id=user_id)
+    room = get_owned_noob_room(repository, room_id=noob_room_id, user_id=user_id)
     if request is not None:
         return request
 
-    config = getattr(session, "config", {}) or {}
+    config = getattr(room, "config", {}) or {}
     prep = config.get("prep")
     if isinstance(prep, dict):
         return NoobWorkspacePrepRequest(spec=NoobWorkspacePrepSpec.model_validate(prep))
-    raise ValueError(f"NOOB session {noob_session_id} does not have a stored prep spec")
+    raise ValueError(f"NOOB room {noob_room_id} does not have a stored prep spec")

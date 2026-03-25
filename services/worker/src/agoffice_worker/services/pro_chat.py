@@ -45,7 +45,7 @@ async def _run_turn(
     return None
 
 
-class ChatSession:
+class ChatRoom:
     def __init__(self, transport: ChatTransport, provider: str) -> None:
         self.transport = transport
         self.provider = provider

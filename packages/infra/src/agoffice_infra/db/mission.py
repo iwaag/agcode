@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from agoffice_domain.schema import MissionCreateRequest
-from agoffice_infra.db.database import get_engine, get_session
+from agoffice_infra.db.database import get_engine, get_room
 from agoffice_infra.db.models import Mission
 
 
@@ -42,7 +42,7 @@ def list_missions(user_id: str, project_id: str) -> list[Mission]:
 def update_mission(
     mission_id: str,
     *,
-    session_id: str | None = None,
+    room_id: str | None = None,
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
 ) -> Mission:
@@ -50,8 +50,8 @@ def update_mission(
         mission = session.get(Mission, mission_id)
         if not mission:
             raise ValueError(f"Mission {mission_id} not found")
-        if session_id is not None:
-            mission.session_id = session_id
+        if room_id is not None:
+            mission.room_id = room_id
         if started_at is not None:
             mission.started_at = started_at
         if completed_at is not None:

@@ -7,7 +7,7 @@ class AgentDeployment(BaseModel):
     agent_id: str
     instruction: str
 
-class SessionConfig(BaseModel):
+class RoomConfig(BaseModel):
     agent_deployments: List[AgentDeployment]
     title: str
     project_id: str
@@ -17,17 +17,17 @@ class AgentConfig(BaseModel):
     name: str
     model: str
 
-class SessionUpdate(BaseModel):
+class RoomUpdate(BaseModel):
     title: Optional[str] = None
     task_started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     config: Optional[Dict[str, Any]] = None
 
-class SessionInfo(SessionUpdate):
+class RoomInfo(RoomUpdate):
     id: str
 
-class SessionListInfo(BaseModel):
-    sessions: List[SessionInfo]
+class RoomListInfo(BaseModel):
+    rooms: List[RoomInfo]
 
 
 class TunnelInfo(BaseModel):
@@ -42,7 +42,7 @@ class MissionCreateRequest(BaseModel):
 
 
 class MissionStartRequest(BaseModel):
-    session_id: Optional[str] = None
+    room_id: Optional[str] = None
     mission_id: str = Field(min_length=1)
 
 
@@ -51,7 +51,7 @@ class MissionInfo(BaseModel):
     title: str
     repo_url: str
     instruction: str
-    session_id: Optional[str] = None
+    room_id: Optional[str] = None
     user_id: str
     project_id: str
     created_at: datetime
@@ -76,7 +76,7 @@ class NoobWorkspacePrepSpec(BaseModel):
     mode: str = "clone"
 
 
-class NoobSessionCreateRequest(BaseModel):
+class NoobRoomCreateRequest(BaseModel):
     title: str
     project_id: str
     initial_instruction: str = Field(min_length=1)
@@ -84,13 +84,13 @@ class NoobSessionCreateRequest(BaseModel):
     keep_context_default: bool = True
 
 
-class NoobSessionUpdate(BaseModel):
+class NoobRoomUpdate(BaseModel):
     title: Optional[str] = None
     finished_at: Optional[datetime] = None
     config: Optional[Dict[str, Any]] = None
 
 
-class NoobSessionInfo(NoobSessionUpdate):
+class NoobRoomInfo(NoobRoomUpdate):
     id: str
     user_id: str
     project_id: str
@@ -106,7 +106,7 @@ class NoobThreadCreateRequest(BaseModel):
 
 class NoobThreadInfo(BaseModel):
     id: str
-    noob_session_id: str
+    noob_room_id: str
     title: Optional[str] = None
     keep_context: bool = True
     status: str = "idle"

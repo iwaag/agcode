@@ -7,7 +7,7 @@ from kubernetes.stream import stream
 
 from agoffice_domain.schema import NoobTaskRequest
 
-from .session_k8s_config import NOOB_REQUEST_PATH, NOOB_STATUS_PATH, NAMESPACE
+from .room_k8s_config import NOOB_REQUEST_PATH, NOOB_STATUS_PATH, NAMESPACE
 
 
 def exec_in_pod(

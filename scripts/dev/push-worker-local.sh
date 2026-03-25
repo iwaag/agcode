@@ -65,9 +65,9 @@ docker save "${IMAGE_NAME}" | bash -lc "${MICROK8S_CTR_CMD} image import -"
 
 mkdir -p "$(dirname "${ENV_FILE}")"
 cat > "${ENV_FILE}" <<EOF
-export SESSION_RUNTIME_MODE=local_microk8s
+export ROOM_RUNTIME_MODE=local_microk8s
 export WORKER_BUILD_ID=${BUILD_ID}
-export SESSION_REMOTE_CONFIG_PATH=${ROOT_DIR}/deploy/k8s/remote-config.yaml
+export ROOM_REMOTE_CONFIG_PATH=${ROOT_DIR}/deploy/k8s/remote-config.yaml
 EOF
 
 if [[ "${TARGET}" == "pro" ]]; then

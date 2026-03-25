@@ -23,6 +23,6 @@ services:
       context: ../..
       dockerfile: deploy/docker/worker-noob.Dockerfile
     environment:
-      NOOB_SESSION_ROOT: /mnt/session
+      NOOB_ROOM_ROOT: /mnt/room
 
  

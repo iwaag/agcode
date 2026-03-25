@@ -5,7 +5,7 @@ from kubernetes.client.rest import ApiException
 
 from agoffice_domain.schema import NoobWorkspacePrepRequest
 
-from .session_k8s_config import (
+from .room_k8s_config import (
     CLIENT_ID,
     HATCHET_CLIENT_HOST_PORT,
     HATCHET_CLIENT_SERVER_URL,
@@ -112,7 +112,7 @@ def ensure_service(
 def build_pod(
     *,
     pod_name: str,
-    session_id: str,
+    room_id: str,
     user_id: str,
     token: str,
     role: str,
@@ -127,9 +127,9 @@ def build_pod(
     extra_env: list[client.V1EnvVar] | None = None,
 ) -> client.V1Pod:
     labels = {
-        "task-id": session_id,
+        "task-id": room_id,
         "user-id": user_id,
-        "type": "session-worker",
+        "type": "room-worker",
         "role": role,
     }
     seed_mount_path = "/seed"
@@ -210,8 +210,8 @@ def build_pod(
         )
 
     env = [
-        client.V1EnvVar(name="TASK_ID", value=session_id),
-        client.V1EnvVar(name="SESSION_ROLE", value=role),
+        client.V1EnvVar(name="TASK_ID", value=room_id),
+        client.V1EnvVar(name="ROOM_ROLE", value=role),
         client.V1EnvVar(name="USER_ID", value=user_id),
         client.V1EnvVar(name="AUTH_TOKEN", value=token),
         client.V1EnvVar(name="WORKER_BUILD_ID", value=WORKER_BUILD_ID),
@@ -515,21 +515,21 @@ def wait_for_service_endpoints(v1: client.CoreV1Api, service_name: str) -> None:
 
 def build_noob_prep_job(
     *,
-    session_id: str,
+    room_id: str,
     user_id: str,
     pvc_name: str,
     prep_request: NoobWorkspacePrepRequest,
 ) -> client.V1Job:
-    job_name = get_noob_prep_job_name(session_id)
+    job_name = get_noob_prep_job_name(room_id)
     labels = {
-        "task-id": session_id,
+        "task-id": room_id,
         "user-id": user_id,
-        "type": "session-worker",
+        "type": "room-worker",
         "role": "noob-prep",
     }
     spec = prep_request.spec
     env = [
-        client.V1EnvVar(name="NOOB_SESSION_ROOT", value=NOOB_MOUNT_PATH),
+        client.V1EnvVar(name="NOOB_ROOM_ROOT", value=NOOB_MOUNT_PATH),
         client.V1EnvVar(name="PREP_REPO_URL", value=spec.repo_url),
         client.V1EnvVar(name="PREP_REF", value=spec.ref or ""),
         client.V1EnvVar(name="PREP_DEPTH", value=str(spec.depth or "")),
@@ -544,7 +544,7 @@ def build_noob_prep_job(
         env=env,
         volume_mounts=[
             client.V1VolumeMount(
-                name="session-data",
+                name="room-data",
                 mount_path=NOOB_MOUNT_PATH,
                 read_only=False,
             )
@@ -557,7 +557,7 @@ def build_noob_prep_job(
             containers=[container],
             volumes=[
                 client.V1Volume(
-                    name="session-data",
+                    name="room-data",
                     persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
                         claim_name=pvc_name,
                         read_only=False,

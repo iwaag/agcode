@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from agoffice_api.realtime.socketio_proxy import SOCKETIO_PATH, sio
 from agoffice_api.routers.mission import router as mission_router
-from agoffice_api.routers.session import router as session_router
+from agoffice_api.routers.room import router as room_router
 from agoffice_infra.db.database import init_database
 
 
@@ -26,7 +26,7 @@ fastapi_app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-fastapi_app.include_router(session_router, prefix="/session", tags=["session"])
+fastapi_app.include_router(room_router, prefix="/room", tags=["room"])
 fastapi_app.include_router(mission_router, prefix="/mission", tags=["mission"])
 
 logging.basicConfig(level=logging.DEBUG, force=True)

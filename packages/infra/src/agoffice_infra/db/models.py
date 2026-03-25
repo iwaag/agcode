@@ -12,8 +12,8 @@ def generate_nanoid() -> str:
     return nanoid.generate(size=12)
 
 
-def generate_session_id(*, user_id: str, project_id: str, session_index: int) -> str:
-    raw = f"{user_id}:{project_id}:{session_index}"
+def generate_room_id(*, user_id: str, project_id: str, room_index: int) -> str:
+    raw = f"{user_id}:{project_id}:{room_index}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
 
 class Agent(SQLModel, table=True):
@@ -32,9 +32,9 @@ class Instruction(SQLModel, table=True):
     title: str
     content: str
 
-class Session(SQLModel, table=True):
+class Room(SQLModel, table=True):
     __table_args__ = (
-        UniqueConstraint("user_id", "project_id", "session_index", name="uq_session_user_project_index"),
+        UniqueConstraint("user_id", "project_id", "room_index", name="uq_room_user_project_index"),
     )
 
     id: str = Field(
@@ -48,7 +48,7 @@ class Session(SQLModel, table=True):
     updated_at: Optional[datetime]
     user_id: str = Field(index=True)
     project_id: str
-    session_index: int = Field(index=True)
+    room_index: int = Field(index=True)
     config: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(MutableDict.as_mutable(JSONB), nullable=False),
@@ -62,7 +62,7 @@ class Mission(SQLModel, table=True):
     title: str
     repo_url: str
     instruction: str
-    session_id: Optional[str] = Field(default=None, index=True)
+    room_id: Optional[str] = Field(default=None, index=True)
     user_id: str = Field(index=True)
     project_id: str = Field(index=True)
     created_at: datetime
@@ -70,7 +70,7 @@ class Mission(SQLModel, table=True):
     completed_at: Optional[datetime] = None
 
 
-class NoobSession(SQLModel, table=True):
+class NoobRoom(SQLModel, table=True):
     id: str = Field(
         default_factory=generate_nanoid,
         sa_column=Column(String(12), primary_key=True, index=True, nullable=False),
@@ -93,7 +93,7 @@ class NoobThread(SQLModel, table=True):
         default_factory=generate_nanoid,
         sa_column=Column(String(12), primary_key=True, index=True, nullable=False),
     )
-    noob_session_id: str = Field(index=True)
+    noob_room_id: str = Field(index=True)
     title: Optional[str] = None
     keep_context: bool = True
     status: str = "idle"
